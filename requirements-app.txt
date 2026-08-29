@@ -1,0 +1,11 @@
+# Build dependencies for the menu bar launcher (menubar.py, setup_app.py,
+# make_icons.py). NOT needed to run the service: the built .app bundles
+# rumps itself and only shells out to .venv/bin/uvicorn, so a machine
+# that just runs "Text to Speech.app" needs requirements.txt alone.
+#
+#   pip install -r requirements-app.txt
+#   python make_icons.py
+#   python setup_app.py py2app
+rumps>=0.4
+py2app>=0.28
+pillow>=10

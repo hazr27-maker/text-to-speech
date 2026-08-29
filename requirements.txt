@@ -1,0 +1,8 @@
+fastapi>=0.115
+uvicorn>=0.30
+pydantic>=2.0
+PyYAML>=6.0
+numpy>=1.26
+soundfile>=0.12
+mlx-audio>=0.3.0
+num2words>=0.5

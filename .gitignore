@@ -1,0 +1,10 @@
+.venv/
+cache/
+__pycache__/
+*.wav
+build/
+dist/
+.DS_Store
+claude.md
+CLAUDE.md
+.claude/

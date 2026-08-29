@@ -1,0 +1,113 @@
+# TTS best practices
+
+Practical guidance for getting clean voice-overs out of this service
+(Qwen3-TTS CustomVoice). Everything here runs locally.
+
+## Writing the script
+
+- **Write for the ear, not the eye.** Short sentences. One idea per
+  sentence. Read it aloud yourself first — if you stumble, the model will.
+- **Punctuation is your intonation control.** Commas force short pauses;
+  full stops force sentence-final falls; question marks get rising
+  intonation. A paragraph with no commas gets read in one breathless run.
+- **Numbers are normalized automatically** (English voices): clock
+  times, €/$/£ currency, percentages, ordinals (28th), years, digit
+  ranges (3–5), and plain numbers are expanded to words before the model
+  sees them. Check what the model will actually be asked to say with
+  `POST /normalize` if a reading surprises you.
+- **Still spell out yourself:**
+  - Units and symbols: "&" → "and", "/" → "or" (or "per"), "km" → "kilometres".
+  - Acronyms: initialisms with dots, spaces, or hyphens ("A.P.I.",
+    "V-A-T"), or respell pronounceable ones ("sequel" for SQL) — ideally
+    once, in `pronunciations.yaml`, not in every script.
+  - URLs, file paths, version numbers: rewrite as you'd say them
+    ("app dot py", "version two point one").
+- **Keep emphasis in the wording,** not in formatting — ALL CAPS,
+  asterisks, and markdown do nothing (or get read strangely).
+
+## Fixing mispronunciations
+
+- Add a line to `pronunciations.yaml` (`word: "respelling"`), press
+  **Reload config**, regenerate. The fix is permanent and applies to all
+  future scripts; the cache invalidates exactly the lines it touches.
+- Respelling tricks: hyphens force syllable breaks ("check-point"),
+  spaces split compounds, sounds-like spellings fix odd words
+  ("koob-control"), stress can often be nudged by doubling a letter or
+  hyphenating ("REE-cord" style respellings sometimes help — test).
+- This model has no phoneme/SSML input — respelling is the lever.
+
+## Fixing awkward delivery
+
+- **Regenerate.** Synthesis is sampled, so the same line reads slightly
+  differently each run. An awkward phrase often fixes itself in one or
+  two re-rolls (the Regenerate button bypasses the cache).
+- **The repeated-word warning.** Sampling occasionally makes the model
+  say a word twice ("28th 28th"). When a render comes back longer than
+  its text should need, the page says so — *The model may have repeated
+  a word — listen back, or Regenerate.* It is deliberately cautious: it
+  catches gross repetitions, not subtle ones, so your ear stays the
+  final check.
+- **Style text** (per voice, in `voices.yaml`) steers overall delivery:
+  pace ("speak slowly and deliberately, with clear pauses"), energy,
+  emotion, register. It changes the model's actual prosody — prefer it
+  over post-processing when the whole voice should change.
+  Note: the 0.6B model builds ignore style text.
+- **Speed slider** for exact pacing (pitch-preserving, 0.5–1.5×).
+  Small moves — 0.9–0.95× — usually sound best; below ~0.8× the pauses
+  start to feel stretched.
+- **Restructure before you fight.** If a sentence reads badly after a
+  few re-rolls, reword it — it's faster than hunting a perfect take.
+
+## Levels and mastering
+
+- **Loudness is handled for you.** Every render is normalised to -16 LUFS
+  with a -1 dBTP ceiling, so clips sit at a consistent volume when played
+  back-to-back and won't clip when encoded into a video. You should not
+  need to touch gain in your editor.
+- **Very short, punchy clips** (a single word like "Stop.") can come out
+  slightly quieter than the rest. They hit the peak ceiling before
+  reaching the loudness target — the only way louder is compression,
+  which would change the delivery. If such a line must match, record it
+  as part of a longer sentence and cut it in your editor.
+- **Don't normalise again downstream.** Stacking another pass on top
+  undoes the headroom and can introduce pumping.
+
+## Known limitations
+
+- **Homographs can't be fixed in the lexicon.** Words like "read",
+  "live", "lead", and "wound" change pronunciation with context, and the
+  lexicon is a whole-word find-and-replace — respelling one sense breaks
+  the other. If one is read wrongly, reword the sentence ("has read" →
+  "has finished reading"). Regenerating sometimes lands the right sense
+  too, since the model uses context.
+- **Takes are not reproducible.** Synthesis is sampled, so the same line
+  rendered twice differs slightly, and a colleague on another machine
+  won't get your exact take. What you download is the artefact — keep
+  approved WAVs; don't assume you can re-create one identically later.
+  (Locally, the cache does return the same file until the text changes.)
+- **Joins between chunks are uniform.** Text over ~350 characters is
+  split on sentence boundaries and rejoined with a fixed short pause, so
+  a break between two paragraphs sounds the same as one mid-paragraph.
+  For a long section where pacing matters, render paragraph by paragraph
+  and assemble in your editor, where you control the gaps.
+
+## Workflow
+
+- **Chunking is automatic** (≤350 chars, sentence boundaries) — but the
+  model still does best with paragraph-sized inputs. Render a long
+  script section by section rather than as one wall of text.
+- **One render is capped at 5,000 characters** (~5 minutes of speech).
+  That is a deliberate ceiling, not a technical limit: generation is
+  serial at roughly a thousand characters a minute, so a bigger paste
+  ties up the service for a long time with no progress to watch. Work in
+  sections and assemble in your editor.
+- **The cache is your friend.** Identical text + voice + speed returns
+  instantly. Iterate on the one line you're editing; the rest of the
+  script costs nothing to re-render.
+- **Lock the wording before polishing delivery.** Every text edit is a
+  new render; every delivery edit on stable text is nearly free.
+- **Listen on the target device.** Laptop speakers hide sibilance and
+  low-end artifacts that headphones or a phone will expose.
+- **Keep masters at 1.0×.** If you need a slow variant, render at 1.0
+  and let the speed control derive it — you can always re-derive, and
+  the base render stays reusable.

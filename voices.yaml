@@ -1,0 +1,150 @@
+# Voice manifest — the contract between callers and the model.
+#
+# --- voice source (exactly one per entry) --------------------------------
+#
+# `speaker`     a preset baked into the checkpoint   (Qwen CustomVoice)
+# `voice_pack`  a separately downloaded voice file   (Kokoro, Piper)
+# `ref_audio`   path to a clip to clone              (Chatterbox, F5)
+# (none)        described by `style` text alone      (Qwen VoiceDesign)
+#
+# Which of these a checkpoint accepts is declared by its backend, so an
+# entry the active model can't render is reported by "Reload config"
+# (and by `python engine.py check`) rather than mis-synthesised.
+#
+#   CustomVoice 1.7B presets: Ryan, Aiden (English natives); Vivian,
+#   Serena, Uncle_Fu (Chinese); Dylan (Beijing), Eric (Sichuan);
+#   Ono_Anna (Japanese); Sohee (Korean).
+#   Verify against the live checkpoint with:
+#     python engine.py list-speakers
+#
+# --- other fields --------------------------------------------------------
+#
+# `gender` (optional) — shown in the picker as "label — gender". The
+# model API doesn't expose it, so it is stated here; a voice without it
+# simply shows the label.
+#
+# `model` (optional) — pin this voice to a checkpoint. /speak switches
+# to it, and it becomes selectable even if it isn't in TTS_MODELS. Use
+# it when a voice only makes sense on one model (a Kokoro voice pack on
+# a Qwen checkpoint is nonsense); leave it off to follow the model
+# selector, which is what every voice below does.
+#
+# `language` — every CustomVoice preset can speak any supported language:
+#   english, chinese, german, french, spanish, italian, portuguese,
+#   russian, japanese, korean (or "auto").
+#   Verify with: python engine.py list-languages
+#
+# `speed` (optional, 0.5–1.5, default 1.0) — pitch-preserving tempo
+# applied after synthesis. Pacing can also be steered naturally via the
+# style text ("speak slowly and deliberately"). A per-request `speed`
+# overrides this default.
+#
+# `style` — free-text steering. Only families that declare the
+# "instruct" capability receive it; elsewhere it is ignored, and left
+# out of the cache key so it can't split the cache either.
+
+# --- English -------------------------------------------------------------
+
+- id: narrator_en
+  label: "Course Narrator"
+  speaker: Ryan
+  gender: male
+  language: English
+  style: "Calm, clear e-learning narrator. Measured pace, warm and authoritative."
+  tags: [training, narration]
+
+- id: presenter_en
+  label: "Upbeat Presenter"
+  speaker: Aiden
+  gender: male
+  language: English
+  style: "Sunny, engaging presenter. Good for module intros and transitions."
+  tags: [training, intro]
+
+- id: presenter_en_slow
+  label: "Presenter (slow)"
+  speaker: Aiden
+  gender: male
+  language: English
+  style: "Speak slowly and deliberately, with clear pauses between phrases. Calm, unhurried presenter."
+  speed: 0.9
+  tags: [training, intro, slow]
+
+- id: coach_en
+  label: "Encouraging Coach"
+  speaker: Aiden
+  gender: male
+  language: English
+  style: "Supportive, conversational coach giving feedback and encouragement."
+  tags: [training, feedback]
+
+- id: announcer_en
+  label: "Ring Announcer"
+  speaker: Ryan
+  gender: male
+  language: English
+  style: "Confident, high-energy arena announcer."
+  tags: [promo]
+
+# --- Other languages (same narrator persona) ----------------------------
+
+- id: narrator_de
+  label: "Kurs-Erzähler"
+  speaker: Ryan
+  gender: male
+  language: German
+  style: "Ruhiger, klarer E-Learning-Erzähler. Gemessenes Tempo."
+  tags: [training, narration, german]
+
+- id: narrator_fr
+  label: "Narrateur"
+  speaker: Ryan
+  gender: male
+  language: French
+  style: "Narrateur e-learning calme et clair, rythme mesuré."
+  tags: [training, narration, french]
+
+- id: narrator_es
+  label: "Narrador"
+  speaker: Ryan
+  gender: male
+  language: Spanish
+  style: "Narrador de e-learning tranquilo y claro, ritmo pausado."
+  tags: [training, narration, spanish]
+
+- id: narrator_ja
+  label: "ナレーター"
+  speaker: Ono_Anna
+  gender: female
+  language: Japanese
+  style: "落ち着いた明瞭なイーラーニングのナレーション。"
+  tags: [training, narration, japanese]
+
+- id: narrator_ko
+  label: "내레이터"
+  speaker: Sohee
+  gender: female
+  language: Korean
+  style: "차분하고 명확한 이러닝 내레이션."
+  tags: [training, narration, korean]
+
+- id: narrator_zh
+  label: "旁白"
+  speaker: Serena
+  gender: female
+  language: Chinese
+  style: "平静清晰的课程旁白，语速适中。"
+  tags: [training, narration, chinese]
+
+# --- Kokoro example (commented; uncomment after `pip` has the weights) ---
+#
+# Kokoro-82M ships genuine English female voices, which CustomVoice does
+# not. It takes voice packs rather than presets and ignores `style`.
+#
+# - id: narrator_en_f
+#   label: "Course Narrator"
+#   voice_pack: af_heart
+#   gender: female
+#   language: English
+#   model: mlx-community/Kokoro-82M-4bit
+#   tags: [training, narration]

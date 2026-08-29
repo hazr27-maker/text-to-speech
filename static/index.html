@@ -1,0 +1,1155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local TTS</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1c1b18; --muted: #6f6b63;
+    --line: #e4e1da; --accent: #2f6f4f; --accent-hover: #275e42;
+    --accent-ink: #ffffff; --wave: #2f6f4f; --hover: #f0eee9;
+    /* buttons sit one step off the card so they read as raised rather
+       than relying on their border alone */
+    --btn: #f4f2ee; --btn-hover: #eae7e0;
+    --ring: rgba(47, 111, 79, .18);
+    /* type scale — four steps, deliberately far enough apart to read as
+       hierarchy. lg: page title. md: body, inputs, buttons, option rows.
+       sm: secondary text and secondary controls. xs: eyebrow labels,
+       badges, counters (uppercase ones carry letter-spacing). */
+    --fs-lg: 1.15rem; --fs-md: 1rem; --fs-sm: .875rem; --fs-xs: .75rem;
+    /* corner radii: cards, controls, and the small things inside them */
+    --r-lg: 10px; --r: 8px; --r-sm: 6px;
+    --danger: #b3261e;
+    --chevron: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%236f6b63' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #161513; --panel: #201f1c; --ink: #ece9e2; --muted: #98938a;
+      --line: #33312c; --accent: #4d9c74; --accent-hover: #5fb287;
+      --accent-ink: #0e1512; --wave: #4d9c74; --hover: #282723;
+      --btn: #2a2925; --btn-hover: #35332d;
+      --danger: #f08a80;
+      --ring: rgba(77, 156, 116, .25);
+      --chevron: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%2398938a' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; gap: .75rem; flex-wrap: wrap; }
+  h1 { font-size: var(--fs-lg); margin: 0; letter-spacing: .01em; white-space: nowrap; }
+  .modelbox { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+  .model-combo { min-width: 0; max-width: 100%; }
+  .model-combo .combo-btn {
+    font-size: var(--fs-sm); color: var(--muted);
+    /* raised off the page, the way buttons are raised off a card */
+    background: var(--btn); border-radius: var(--r-sm); padding: .35rem .45rem .35rem .55rem;
+  }
+  .model-combo .combo-btn:hover:not(:disabled) { background: var(--btn-hover); }
+  /* the eyebrow label keeps its type, just sits inline in the header */
+  .modelbox label { margin: 0; white-space: nowrap; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1rem 1.1rem; margin-bottom: 1rem; }
+  label { display: block; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .4rem; }
+  textarea {
+    width: 100%; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--r); padding: .6rem .7rem;
+    font: inherit; font-size: var(--fs-sm); resize: vertical;
+  }
+  /* native resizer can't be themed (paints light chrome), so it's off
+     and #grip below does the job in the app's own styling */
+  textarea { min-height: 140px; resize: none; display: block; }
+  /* floating pill: transparent border insets it from the edge, track
+     margin keeps it clear of the field's rounded corners */
+  /* ---- Scrollbars -------------------------------------------------
+     macOS uses *overlay* scrollbars: they fade out when idle, and
+     Chromium ignores ::-webkit-scrollbar styling for them entirely, so
+     neither the pseudo-elements nor `scrollbar-color` could give a
+     consistent pill (verified — a forced red thumb never painted).
+     The native bar is therefore hidden and `makeScroller` draws one,
+     which also means every OS gets the identical scroller.
+  ------------------------------------------------------------------ */
+  .scroll-host { scrollbar-width: none; }
+  .scroll-host::-webkit-scrollbar { width: 0; height: 0; }
+  .scroll-box { position: relative; }
+  .scroll-bar {
+    position: absolute; top: 6px; right: 4px; bottom: 6px; width: 6px;
+    opacity: 0; transition: opacity .18s ease; pointer-events: none;
+  }
+  .scroll-box.scrollable .scroll-bar { opacity: 1; pointer-events: auto; }
+  .scroll-thumb {
+    position: absolute; left: 0; width: 100%; border-radius: 999px;
+    background: var(--line); cursor: default;
+    transition: background .12s ease;
+  }
+  .scroll-box:hover .scroll-thumb { background: var(--muted); }
+  .scroll-thumb:hover, .scroll-thumb.dragging { background: var(--ink); }
+  #grip {
+    height: 14px; margin-top: -1px; cursor: ns-resize;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 0 0 var(--r) var(--r);
+  }
+  #grip::before {
+    content: ""; width: 34px; height: 3px; border-radius: 2px;
+    background: var(--line); transition: background .12s ease;
+  }
+  #grip:hover::before, #grip.dragging::before { background: var(--muted); }
+  .row { display: flex; gap: .75rem; align-items: center; margin-top: .9rem; flex-wrap: wrap; }
+  /* Speed is set before generating, so it reads above the buttons that
+     act on it. The counter rides this row, so the row tucks close under
+     the textarea — a field counter that drifts away from its field
+     stops reading as belonging to it — while the buttons get a clear
+     gap, being the thing that acts rather than another setting. */
+  .speedrow { margin-top: .2rem; }
+  .speedrow + .row { margin-top: .9rem; }
+  button, .btn {
+    font: inherit; border: 1px solid var(--line); border-radius: var(--r);
+    background: var(--btn); color: var(--ink); padding: .55rem 1rem; cursor: pointer;
+    transition: background .12s ease, border-color .12s ease;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: .45rem;
+    text-decoration: none; line-height: 1.2;
+  }
+  .btn svg { width: 1em; height: 1em; flex: none; }
+  button:hover:not(:disabled), .btn:hover { background: var(--btn-hover); border-color: var(--muted); }
+  button:active:not(:disabled), .btn:active { transform: translateY(1px); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button:disabled { opacity: .5; cursor: wait; transform: none; }
+  button:focus-visible, a:focus-visible,
+  input:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  /* fields get one merged ring instead of a border plus an offset outline */
+  textarea:focus-visible {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--ring);
+  }
+  textarea:hover { border-color: var(--muted); }
+
+  /* ---- Dropdown pattern ------------------------------------------
+     Native <select> popups are drawn by the OS *outside* the page, so
+     they can't be themed or kept inside a card. Every picker here is a
+     custom listbox driven by a hidden <select> that stays the value
+     store, so `.value`, `change` events and saved prefs keep working.
+     Two placements: data-mode="inline" expands in place (pickers that
+     live in a card) and "overlay" floats anchored under the trigger
+     (header/toolbar pickers, where pushing the page down would jar).
+  ------------------------------------------------------------------ */
+  .combo { position: relative; min-width: 0; }
+  .combo > select {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); border: 0;
+  }
+  .combo-btn {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+    gap: .5rem; background: var(--bg); color: var(--ink); text-align: left;
+    border: 1px solid var(--line); border-radius: var(--r); padding: .6rem .7rem;
+    /* `font: inherit` resets size, so the step has to come after it —
+       every picker and the textarea sit on --fs-sm, the same step as
+       the model selector, so the three values read as one rank */
+    font: inherit; font-size: var(--fs-sm);
+  }
+  .combo-btn:hover:not(:disabled) { border-color: var(--muted); }
+  .combo-btn:focus-visible,
+  .combo[data-open="true"] > .combo-btn {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring);
+  }
+  .combo-btn .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .combo-caret {
+    flex: none; width: 1em; height: 1em;
+    background: var(--chevron) no-repeat center / 1em 1em;
+    transition: transform .15s ease;
+  }
+  .combo[data-open="true"] .combo-caret { transform: rotate(180deg); }
+  .combo-listbox { display: none; }
+  .combo[data-open="true"] .combo-listbox { display: block; }
+  .combo[data-mode="inline"] .combo-listbox { position: relative; margin-top: .4rem; }
+  /* anchored to the trigger's RIGHT edge: these live at the right of the
+     header, so growing rightwards from `left: 0` would run off-screen */
+  .combo[data-mode="overlay"] .combo-listbox {
+    position: absolute; z-index: 20; top: calc(100% + .35rem);
+    right: 0; left: auto;
+    min-width: 100%; width: max-content;
+    max-width: min(24rem, calc(100vw - 2.5rem));
+  }
+  .combo-list {
+    font-size: var(--fs-sm);
+    max-height: 15rem; overflow-y: auto;
+    padding: .25rem .55rem .25rem .25rem;
+    background: var(--bg); border: 1px solid var(--line); border-radius: var(--r);
+    overscroll-behavior: contain;
+  }
+  .combo[data-mode="overlay"] .combo-list {
+    background: var(--panel); box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
+  }
+  .combo-group {
+    font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); padding: .55rem .6rem .25rem;
+  }
+  .combo-group:first-child { padding-top: .3rem; }
+  .combo-opt {
+    display: flex; align-items: center; gap: .5rem; padding: .42rem .6rem;
+    border-radius: var(--r-sm); cursor: pointer; overflow-wrap: anywhere;
+  }
+  .combo-opt:hover, .combo-opt.active { background: var(--hover); }
+  .combo-opt[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+  .combo-opt[aria-selected="true"]::after {
+    content: "\2713"; margin-left: auto; padding-left: .5rem; font-size: .85em;
+    align-self: flex-start; flex: none;
+  }
+  /* every message lands here and nowhere else, on its own line below
+     the buttons rather than beside them — one that sometimes sits next
+     to Generate and sometimes under it moves as you read it */
+  #status {
+    flex: 1 1 100%;
+    font-size: var(--fs-sm); color: var(--muted);
+    transition: opacity .25s ease;
+  }
+  /* collapsed when there's nothing to say: reserving the line to avoid
+     a shift left a permanent gap under the buttons, and the card
+     already resizes far more than this when a render lands */
+  #status:empty { display: none; }
+  #status.err, #reloadNote.err { color: var(--danger); }
+  #status.fade, #reloadNote.fade { opacity: 0; }
+  #reloadNote { transition: opacity .25s ease; }
+  canvas { width: 100%; height: 96px; display: block; border-radius: var(--r); background: var(--bg); border: 1px solid var(--line); cursor: pointer; }
+  .wavebox { position: relative; }
+  #loading {
+    position: absolute; inset: 0; display: none; overflow: hidden;
+    flex-direction: column; align-items: center; justify-content: center; gap: .6rem;
+    background: var(--bg); border: 1px solid var(--line); border-radius: var(--r);
+  }
+  /* asking shares the overlay but not the sweep: nothing is in flight,
+     and a shimmer under a question reads as one */
+  #result.loading #loading, #result.asking #loading { display: flex; }
+  #loadingActions { position: relative; display: flex; gap: .5rem; }
+  #loadingActions button { font-size: var(--fs-sm); padding: .35rem .8rem; }
+  /* indeterminate shimmer — duration is unknown until the model returns */
+  #loading::before {
+    content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, var(--hover), transparent);
+    animation: sweep 1.5s ease-in-out infinite;
+  }
+  @keyframes sweep { to { transform: translateX(100%); } }
+  #loadingLabel {
+    position: relative; font-size: var(--fs-sm); color: var(--muted);
+    /* two lines: what is happening, and how long it ought to take.
+       `anywhere` because a failure can quote a checkpoint id, which has
+       no spaces to break at and is wider than a phone */
+    white-space: pre-line; overflow-wrap: anywhere;
+    text-align: center; padding: 0 1rem; line-height: 1.5;
+  }
+  #result.loading .playrow, #result.asking .playrow { opacity: .35; pointer-events: none; }
+  #result.asking #loading::before { animation: none; background: none; }
+  /* `asking` is settled, not ticking, so its box may grow to the
+     question. `loading` stays absolutely positioned — its text repaints
+     every second and must not resize the card under the reader. */
+  #result.asking .wavebox canvas { display: none; }
+  #result.asking #loading { position: relative; inset: auto; min-height: 96px; }
+  @media (prefers-reduced-motion: reduce) { #loading::before { animation: none; } }
+  .playrow {
+    display: flex; align-items: center; gap: .8rem; margin-top: .7rem;
+    font-size: var(--fs-sm); color: var(--muted); flex-wrap: wrap;
+  }
+  #time, #dl { white-space: nowrap; }
+  #play {
+    width: 2.4rem; height: 2.4rem; border-radius: 50%; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+    font-size: .9rem; line-height: 1;
+  }
+  #play:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  #time { font-variant-numeric: tabular-nums; }
+  #dl { margin-left: auto; }
+  audio { display: none; }
+  /* native marker is unthemed and its spacing is browser-decided, so we
+     draw the same chevron the selects use and set the gap explicitly */
+  /* same eyebrow treatment as the card labels (VOICE / TEXT / SPEECH),
+     so the panel reads as another card section rather than a stray
+     control. The chevron is sized in em, so it tracks the smaller step
+     on its own. */
+  details summary {
+    cursor: pointer; font-size: var(--fs-xs); color: var(--muted); user-select: none;
+    text-transform: uppercase; letter-spacing: .06em;
+    display: flex; align-items: center; gap: .45rem; list-style: none;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before {
+    content: ""; flex: none; width: 1em; height: 1em;
+    background: var(--chevron) no-repeat center / 1em 1em;
+    transform: rotate(-90deg); transition: transform .15s ease;
+  }
+  details[open] summary::before { transform: rotate(0deg); }
+  details summary:hover { color: var(--ink); }
+  .setting { display: flex; align-items: center; gap: .6rem; margin-top: .8rem; font-size: var(--fs-sm); flex-wrap: wrap; }
+  /* a manifest problem is a sentence, not a status word: let it take its
+     own row rather than squeezing the buttons into two lines each */
+  #reloadNote.err { flex-basis: 100%; }
+  .setting input[type=checkbox] { accent-color: var(--accent); width: 1rem; height: 1rem; }
+  /* plain label beside a control: opt out of the eyebrow treatment */
+  .setting label { all: unset; cursor: pointer; }
+  #dl { color: var(--accent); font-weight: 600; font-size: var(--fs-sm); padding: .4rem .75rem; }
+  #dl:hover { color: var(--accent-hover); }
+  #count { font-size: var(--fs-xs); color: var(--muted); margin-left: auto; }
+  #count.over { color: var(--accent); }
+  .speedbox { display: flex; align-items: center; gap: .5rem; }
+  /* The thumb and the filled track are the same accent, so accent-color
+     alone makes the thumb dissolve into the fill. accent-color can't
+     colour them separately, so the control is drawn here instead — same
+     reason the scrollbars and dropdowns are. The fill is a gradient
+     stop fed by --fill (set in showSpeed), since WebKit has no
+     equivalent of ::-moz-range-progress. */
+  .speedbox input[type=range] {
+    appearance: none; -webkit-appearance: none;
+    width: 120px; height: 20px; background: none; cursor: pointer;
+  }
+  .speedbox input[type=range]:focus { outline: none; }
+  .speedbox input[type=range]::-webkit-slider-runnable-track {
+    height: 4px; border-radius: 999px;
+    background:
+      linear-gradient(var(--accent), var(--accent)) 0 / var(--fill, 50%) 100% no-repeat,
+      var(--line);
+  }
+  .speedbox input[type=range]::-moz-range-track {
+    height: 4px; border-radius: 999px; background: var(--line);
+  }
+  .speedbox input[type=range]::-moz-range-progress {
+    height: 4px; border-radius: 999px; background: var(--accent);
+  }
+  /* a ring in the card colour lifts the thumb off the fill behind it,
+     closed by a hairline so it still has an edge where the track is
+     unfilled and the two greens aren't touching */
+  .speedbox input[type=range]::-webkit-slider-thumb {
+    appearance: none; -webkit-appearance: none;
+    width: 14px; height: 14px; border-radius: 50%; margin-top: -5px;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--line);
+  }
+  .speedbox input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%; border: none;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--line);
+  }
+  .speedbox input[type=range]:hover::-webkit-slider-thumb { background: var(--accent-hover); }
+  .speedbox input[type=range]:hover::-moz-range-thumb { background: var(--accent-hover); }
+  .speedbox input[type=range]:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--accent), 0 0 0 6px var(--ring);
+  }
+  .speedbox input[type=range]:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--accent), 0 0 0 6px var(--ring);
+  }
+  .speedbox label { all: unset; font-size: var(--fs-sm); color: var(--muted); }
+  #healthInfo {
+    display: grid; grid-template-columns: auto 1fr; gap: .25rem .9rem;
+    margin: 1rem 0 0; padding-top: .8rem; border-top: 1px solid var(--line);
+    font-size: var(--fs-xs); color: var(--muted);
+  }
+  #healthInfo dt { color: var(--muted); }
+  #healthInfo dd { margin: 0; color: var(--ink); opacity: .75; font-variant-numeric: tabular-nums; }
+  #speedVal { font-size: var(--fs-sm); color: var(--muted); min-width: 2.6em; }
+  .hidden { display: none; }
+  footer {
+    margin-top: 2.5rem; text-align: center;
+    font-size: var(--fs-xs); color: var(--muted); opacity: .45;
+  }
+
+  @media (max-width: 600px) {
+    .wrap { padding: 1.25rem .9rem 3rem; }
+    /* model selector gets its own full-width row instead of squeezing
+       the title and pushing the state badge off-screen */
+    header { flex-direction: column; align-items: stretch; gap: .6rem; margin-bottom: 1.1rem; }
+    .modelbox { width: 100%; }
+    .model-combo { flex: 1 1 auto; }
+    .card { padding: .9rem; }
+    #go, #regen { flex: 1 1 auto; }
+    /* the slider takes the whole row here, so the counter can't stay
+       beside it. Ordering it first keeps it on the line above rather
+       than pushing it below the slider — and that line is directly
+       under the textarea, which is the field it counts. */
+    .speedbox { flex: 1 1 100%; order: 1; }
+    .speedbox input[type=range] { flex: 1; width: auto; }
+    /* the overlay is the one place where the copy is fixed and the box
+       isn't: a step down here buys the ticking states real headroom
+       instead of leaving them a few pixels short. The buttons keep
+       their size — they are the tap target. */
+    #loadingLabel { font-size: var(--fs-xs); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Local TTS</h1>
+    <span class="modelbox">
+      <label for="modelSel">Model</label>
+      <select id="modelSel" title="Model checkpoint"></select>
+    </span>
+  </header>
+
+  <div class="card">
+    <label for="voice">Voice</label>
+    <select id="voice"></select>
+  </div>
+
+  <div class="card">
+    <label for="text">Text</label>
+    <textarea id="text" placeholder="Paste a line or paragraph of your training script…"></textarea>
+    <div id="grip" title="Drag to resize"></div>
+    <div class="row speedrow">
+      <span class="speedbox">
+        <label for="speed">Speed</label>
+        <input type="range" id="speed" min="0.5" max="1.5" step="0.05" value="1">
+        <span id="speedVal">1.0×</span>
+      </span>
+      <span id="count"></span>
+    </div>
+    <div class="row">
+      <button class="primary" id="go">Generate</button>
+      <button id="regen" title="Re-roll: synthesis is sampled, so a re-render often fixes an awkward reading. Bypasses and overwrites the cache.">Regenerate</button>
+      <!-- role="status" = polite live region: failures and the stutter
+           warning must reach a screen reader, not just the sighted -->
+      <span id="status" role="status"></span>
+    </div>
+  </div>
+
+  <div class="card hidden" id="result">
+    <label>Speech</label>
+    <div class="wavebox">
+      <canvas id="wave" height="96" title="Click to seek"></canvas>
+      <div id="loading" aria-live="polite">
+        <span id="loadingLabel">Generating…</span>
+        <div id="loadingActions" class="hidden"></div>
+      </div>
+    </div>
+    <div class="playrow">
+      <button id="play" aria-label="Play">&#9654;</button>
+      <span id="time">0:00 / 0:00</span>
+      <a id="dl" class="btn" download="tts.wav">Download<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5m0 0 3-3m-3 3-3-3M2.75 13.25h10.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+    </div>
+    <audio id="player"></audio>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>Settings</summary>
+      <div class="setting">
+        <input type="checkbox" id="useCache" checked>
+        <label for="useCache">Use cache (re-serve identical lines instantly)</label>
+      </div>
+      <div class="setting">
+        <button id="reload" title="Re-read voices.yaml and pronunciations.yaml without restarting">Reload config</button>
+        <button id="saveSettings" title="Remember voice, speed, cache and model in this browser">Save settings</button>
+        <button id="clearCache" title="Delete all cached renders — anything you ask for again is simply re-synthesised">Clear cache</button>
+        <span id="reloadNote" role="status"></span>
+      </div>
+      <dl id="healthInfo"></dl>
+    </details>
+  </div>
+  <footer>Made by Harry</footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let voicesById = {};
+
+// Gender is stated in voices.yaml (no model API exposes it) and comes
+// through /voices, so it can't drift from the manifest the way a map
+// keyed on preset names did. The preset's own name (Ryan, Aiden…) is an
+// implementation detail of the checkpoint; the row shows only what a
+// caster needs.
+
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---- Scroller -----------------------------------------------------
+// Draws the scrollbar the app wants instead of the OS overlay one,
+// which fades when idle and can't be themed (see the CSS note). `box`
+// is an existing positioned ancestor to anchor the track to; without
+// one a wrapper is created.
+function makeScroller(host, box) {
+  host.classList.add('scroll-host');
+  if (box) box.classList.add('scroll-box');
+  else {
+    box = document.createElement('div');
+    box.className = 'scroll-box';
+    host.parentNode.insertBefore(box, host);
+    box.appendChild(host);
+  }
+  const bar = document.createElement('div');
+  bar.className = 'scroll-bar';
+  const thumb = document.createElement('div');
+  thumb.className = 'scroll-thumb';
+  bar.appendChild(thumb);
+  box.appendChild(bar);
+
+  const range = () => host.scrollHeight - host.clientHeight;
+  function update() {
+    const max = range();
+    box.classList.toggle('scrollable', max > 1);
+    if (max <= 1) return;
+    const track = bar.clientHeight;
+    // proportional, but capped: a strictly proportional thumb reads as a
+    // heavy slab on short lists, and past a point its length stops
+    // telling you anything useful
+    const h = Math.min(56, Math.max(24, Math.round(track * host.clientHeight / host.scrollHeight)));
+    thumb.style.height = h + 'px';
+    thumb.style.transform = `translateY(${(host.scrollTop / max) * (track - h)}px)`;
+  }
+  host.addEventListener('scroll', update, { passive: true });
+  new ResizeObserver(update).observe(host);
+
+  thumb.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    thumb.classList.add('dragging');
+    thumb.setPointerCapture(e.pointerId);
+    const y0 = e.clientY, top0 = host.scrollTop;
+    const travel = bar.clientHeight - thumb.offsetHeight;
+    const move = ev => {
+      host.scrollTop = travel > 0 ? top0 + (ev.clientY - y0) * (range() / travel) : top0;
+    };
+    const up = () => {
+      thumb.classList.remove('dragging');
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  });
+
+  update();
+  return { update };
+}
+
+// ---- Dropdown pattern ---------------------------------------------
+// Upgrades a <select> into a themed listbox. The select stays in the
+// DOM as the value store, so everything else keeps using .value and
+// `change`. Re-run .refresh() whenever the select's options are
+// rebuilt. Pure DOM/CSS, so it looks and behaves the same on every OS.
+function makeCombo(select, { mode = 'overlay', cls = '' } = {}) {
+  const wrap = document.createElement('div');
+  wrap.className = cls ? `combo ${cls}` : 'combo';
+  wrap.id = select.id + 'Combo';
+  wrap.dataset.mode = mode;
+  wrap.dataset.open = 'false';
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(select);
+  select.setAttribute('aria-hidden', 'true');
+  select.tabIndex = -1;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'combo-btn';
+  btn.id = select.id + 'Btn';
+  btn.setAttribute('role', 'combobox');
+  btn.setAttribute('aria-haspopup', 'listbox');
+  btn.setAttribute('aria-expanded', 'false');
+  if (select.title) btn.title = select.title;
+  btn.innerHTML = '<span class="label"></span><span class="combo-caret"></span>';
+
+  const listbox = document.createElement('div');
+  listbox.className = 'combo-listbox';
+  const list = document.createElement('div');
+  list.className = 'combo-list';
+  list.id = select.id + 'List';
+  list.setAttribute('role', 'listbox');
+  btn.setAttribute('aria-controls', list.id);
+  listbox.appendChild(list);
+  wrap.append(btn, listbox);
+  const scroller = makeScroller(list, listbox);
+
+  // point the field's <label> at the button people can actually focus
+  const lab = document.querySelector(`label[for="${select.id}"]`);
+  if (lab) { lab.htmlFor = btn.id; list.setAttribute('aria-label', lab.textContent); }
+
+  let opts = [];
+  const isOpen = () => wrap.dataset.open === 'true';
+  const optHtml = (o, i) =>
+    `<div class="combo-opt" role="option" id="${list.id}-${i}"` +
+    ` data-value="${esc(o.value)}" aria-selected="false">${esc(o.textContent)}</div>`;
+
+  function refresh() {
+    let i = 0, html = '';
+    for (const node of select.children) {
+      if (node.tagName === 'OPTGROUP') {
+        html += `<div class="combo-group">${esc(node.label)}</div>`;
+        for (const o of node.children) html += optHtml(o, i++);
+      } else html += optHtml(node, i++);
+    }
+    list.innerHTML = html;
+    opts = [...list.querySelectorAll('.combo-opt')];
+    sync();
+  }
+  function sync() {
+    opts.forEach(o => o.setAttribute('aria-selected', String(o.dataset.value === select.value)));
+    const sel = select.selectedOptions[0];
+    btn.querySelector('.label').textContent = sel ? sel.textContent : '';
+  }
+  function setActive(i) {
+    opts.forEach(o => o.classList.remove('active'));
+    const el = opts[i];
+    if (!el) return;
+    el.classList.add('active');
+    btn.setAttribute('aria-activedescendant', el.id);
+    el.scrollIntoView({ block: 'nearest' });
+  }
+  function open() {
+    wrap.dataset.open = 'true';
+    btn.setAttribute('aria-expanded', 'true');
+    scroller.update();  // no layout to measure until the list is shown
+    setActive(Math.max(0, opts.findIndex(o => o.dataset.value === select.value)));
+  }
+  function close() {
+    wrap.dataset.open = 'false';
+    btn.setAttribute('aria-expanded', 'false');
+    btn.removeAttribute('aria-activedescendant');
+  }
+  function pick(i) {
+    const el = opts[i];
+    close();
+    btn.focus();
+    if (!el || el.dataset.value === select.value) return;
+    select.value = el.dataset.value;
+    select.dispatchEvent(new Event('change'));
+  }
+
+  btn.addEventListener('click', () => isOpen() ? close() : open());
+  list.addEventListener('click', e => {
+    const el = e.target.closest('.combo-opt');
+    if (el) pick(opts.indexOf(el));
+  });
+  // pointer and keyboard share one "active" row, so the highlight never
+  // splits in two when you mouse over a list you opened with the keyboard
+  list.addEventListener('pointermove', e => {
+    const el = e.target.closest('.combo-opt');
+    if (el && !el.classList.contains('active')) setActive(opts.indexOf(el));
+  });
+  let typed = '', typedAt = 0;
+  btn.addEventListener('keydown', e => {
+    const cur = opts.findIndex(o => o.classList.contains('active'));
+    const last = opts.length - 1;
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+      e.preventDefault();
+      if (!isOpen()) return open();
+      setActive(e.key === 'ArrowDown' ? Math.min(last, cur + 1)
+        : e.key === 'ArrowUp' ? Math.max(0, cur - 1)
+        : e.key === 'Home' ? 0 : last);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      isOpen() ? pick(cur) : open();
+    } else if (e.key === 'Escape') {
+      if (isOpen()) { e.preventDefault(); close(); }
+    } else if (e.key === 'Tab') {
+      close();
+    } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      // type-ahead, like a native select
+      const now = Date.now();
+      typed = now - typedAt < 800 ? typed + e.key : e.key;
+      typedAt = now;
+      const hit = opts.findIndex(o => o.textContent.toLowerCase().startsWith(typed.toLowerCase()));
+      if (hit >= 0) { if (!isOpen()) open(); setActive(hit); }
+    }
+  });
+  document.addEventListener('click', e => { if (isOpen() && !wrap.contains(e.target)) close(); });
+  select.addEventListener('change', sync);
+
+  refresh();
+  return { refresh, sync, close };
+}
+
+const combos = {
+  voice: makeCombo($('voice'), { mode: 'inline' }),
+  model: makeCombo($('modelSel'), { mode: 'overlay', cls: 'model-combo' }),
+};
+
+async function loadVoices() {
+  const list = await (await fetch('/voices')).json();
+  voicesById = Object.fromEntries(list.map(v => [v.id, v]));
+  // group by language so the language is stated once per heading rather
+  // than repeated on every row; English first, then alphabetical
+  const byLang = {};
+  for (const v of list) (byLang[v.language] ||= []).push(v);
+  const langs = Object.keys(byLang).sort((a, b) =>
+    a === 'English' ? -1 : b === 'English' ? 1 : a.localeCompare(b));
+  $('voice').innerHTML = langs.map(lang =>
+    `<optgroup label="${esc(lang)}">` +
+    byLang[lang].map(v => {
+      const g = v.gender || '';
+      return `<option value="${esc(v.id)}">${esc(v.label)}${g ? ' — ' + esc(g) : ''}</option>`;
+    }).join('') +
+    '</optgroup>'
+  ).join('');
+  combos.voice.refresh();
+  applyVoice();
+}
+
+let activeModel = '';  // the checkpoint the server says is active
+async function loadModels() {
+  const m = await (await fetch('/models')).json();
+  activeModel = m.active;
+  // name the model family only when more than one is on offer —
+  // spelling out "qwen-customvoice" on every row of an all-Qwen list
+  // says nothing, the same reason the voice picker groups by language
+  const mixed = new Set(m.available.map(x => x.backend)).size > 1;
+  $('modelSel').innerHTML = m.available.map(x => {
+    const name = x.id.split('/').pop() + (mixed ? ` · ${x.backend}` : '');
+    return `<option value="${esc(x.id)}"${x.id === m.active ? ' selected' : ''}>${esc(name)}</option>`;
+  }).join('');
+  combos.model.refresh();
+}
+$('modelSel').addEventListener('change', async () => {
+  try {
+    const res = await fetch('/model', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: $('modelSel').value }),
+    });
+    // the only place that used to discard the server's reason for failing
+    if (!res.ok) throw new Error(await detailOf(res));
+    activeModel = $('modelSel').value;
+    await loadHealth();
+  } catch (e) {
+    // put the picker back on what the server is actually running — a
+    // selector showing a model the switch never reached would lie
+    $('modelSel').value = activeModel;
+    combos.model.sync();
+    fail(e.message);
+  }
+});
+// the manifest's `style` still steers synthesis; it is simply not shown
+function applyVoice() {
+  const v = voicesById[$('voice').value];
+  combos.voice.sync();
+  $('speed').value = (v && v.speed) || 1.0;
+  showSpeed();
+}
+function showSpeed() {
+  const s = $('speed');
+  $('speedVal').textContent = Number(s.value).toFixed(2).replace(/0$/, '') + '×';
+  // geometry, not theme: WebKit can't fill a range track on its own
+  s.style.setProperty('--fill',
+    (s.value - s.min) / (s.max - s.min) * 100 + '%');
+}
+$('voice').addEventListener('change', applyVoice);
+$('speed').addEventListener('input', showSpeed);
+$('text').addEventListener('input', () => {
+  showCount();
+});
+
+makeScroller($('text'));
+$('text').addEventListener('input', () => $('text').dispatchEvent(new Event('scroll')));
+
+// custom textarea resize (native grip renders unthemed chrome)
+$('grip').addEventListener('pointerdown', e => {
+  const ta = $('text'), startY = e.clientY, startH = ta.offsetHeight;
+  $('grip').classList.add('dragging');
+  $('grip').setPointerCapture(e.pointerId);
+  const move = ev => { ta.style.height = Math.max(140, startH + ev.clientY - startY) + 'px'; };
+  const up = () => {
+    $('grip').classList.remove('dragging');
+    removeEventListener('pointermove', move);
+    removeEventListener('pointerup', up);
+  };
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up);
+  e.preventDefault();
+});
+
+let modelWarm = false;
+let modelCached = true;  // assume so until /health says otherwise
+let maxText = 0;
+function showCount() {
+  const n = $('text').value.length;
+  $('count').textContent = maxText
+    ? `${n.toLocaleString()} / ${maxText.toLocaleString()}`
+    : n.toLocaleString();
+  $('count').classList.toggle('over', maxText > 0 && n >= maxText);
+}
+async function loadHealth() {
+  try {
+    const h = await (await fetch('/health')).json();
+    modelWarm = h.model_loaded;
+    modelCached = h.model_cached !== false;
+    maxText = h.max_text;
+    $('text').maxLength = maxText;
+    showCount();
+    const rows = [
+      ['Backend', `${h.backend} (${(h.capabilities || []).join(', ') || 'no options'})`],
+      ['Loudness', h.loudness_lufs != null
+        ? `${h.loudness_lufs} LUFS (EBU R128)` : 'not normalised'],
+      ['Chunk size', `${h.max_chars.toLocaleString()} characters`],
+      ['Maximum input', `${h.max_text.toLocaleString()} characters`],
+      ['Cache folder', h.cache_dir],
+      // the cap is worth seeing before it quietly drops an old render.
+      // Sub-MB spelt out as "Clear cache" does: fmtBytes rounds a few
+      // clips to "0 MB", which reads as an empty cache
+      ['Cache size', !h.cache_bytes ? 'empty'
+        : `${h.cache_bytes >= 1e6 ? fmtBytes(h.cache_bytes) : 'under 1 MB'}${
+          h.cache_max_bytes ? ` of ${fmtBytes(h.cache_max_bytes)}` : ' (no limit)'}`],
+    ];
+    $('healthInfo').innerHTML =
+      rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  } catch { $('healthInfo').textContent = 'Server unreachable.'; }
+}
+
+let waveBuf = null;
+let hasAudio = false;
+let audioCtx = null;   // shared — see the note where it's first used
+let lastUrl = null;    // the current take's blob URL, revoked on replace
+
+function drawWave(buffer, progress = 0) {
+  const canvas = $('wave'), ctx = canvas.getContext('2d');
+  const W = canvas.width = canvas.clientWidth * devicePixelRatio;
+  const H = canvas.height = 96 * devicePixelRatio;
+  ctx.clearRect(0, 0, W, H);
+  const data = buffer.getChannelData(0);
+  const step = Math.max(1, Math.floor(data.length / W));
+  const css = getComputedStyle(document.documentElement);
+  const played = css.getPropertyValue('--wave').trim();
+  const rest = css.getPropertyValue('--line').trim();
+  const mid = H / 2, cut = progress * W;
+  for (let x = 0; x < W; x++) {
+    let min = 1, max = -1;
+    const start = x * step, end = Math.min(start + step, data.length);
+    for (let i = start; i < end; i++) {
+      if (data[i] < min) min = data[i];
+      if (data[i] > max) max = data[i];
+    }
+    if (min > max) continue;
+    ctx.fillStyle = x <= cut ? played : rest;
+    const h = Math.max(1, (max - min) * mid * 0.95);
+    ctx.fillRect(x, mid - (max * mid * 0.95), 1, h);
+  }
+}
+
+// -- custom player (native audio controls ignore the page theme) --
+const player = $('player');
+const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+function paintProgress() {
+  const d = player.duration || 0;
+  $('time').textContent = `${fmt(player.currentTime)} / ${fmt(d)}`;
+  if (waveBuf) drawWave(waveBuf, d ? player.currentTime / d : 0);
+  if (!player.paused && !player.ended) requestAnimationFrame(paintProgress);
+}
+$('play').addEventListener('click', () => player.paused ? player.play() : player.pause());
+player.addEventListener('play', () => { $('play').innerHTML = '&#10074;&#10074;'; $('play').ariaLabel = 'Pause'; paintProgress(); });
+player.addEventListener('pause', () => { $('play').innerHTML = '&#9654;'; $('play').ariaLabel = 'Play'; paintProgress(); });
+player.addEventListener('ended', () => { $('play').innerHTML = '&#9654;'; $('play').ariaLabel = 'Play'; paintProgress(); });
+player.addEventListener('loadedmetadata', paintProgress);
+$('wave').addEventListener('click', e => {
+  if (!player.duration) return;
+  const r = $('wave').getBoundingClientRect();
+  player.currentTime = ((e.clientX - r.left) / r.width) * player.duration;
+  paintProgress();
+});
+
+let progressTimer = null;
+
+function fmtBytes(b) {
+  if (!b) return null;
+  return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`;
+}
+const elapsed = t0 => {
+  const s = Math.floor((Date.now() - t0) / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// The overlay is for waits and questions only — never for failures,
+// which have their own single home under the buttons. 'loading' sweeps,
+// 'asking' holds still; null hands the card back to whatever it held.
+function overlay(state) {
+  const r = $('result');
+  r.classList.remove('loading', 'asking');
+  if (state) { r.classList.remove('hidden'); r.classList.add(state); return; }
+  setActions([]);
+  if (!hasAudio) r.classList.add('hidden');
+}
+const setLabel = t => { $('loadingLabel').textContent = t; };
+// rebuilt only when the buttons themselves change, so a click can't
+// land on a button a progress repaint has just replaced underneath it
+function setActions(buttons) {
+  const box = $('loadingActions');
+  box.replaceChildren(...buttons.map(b => {
+    const el = document.createElement('button');
+    if (b.primary) el.className = 'primary';
+    el.textContent = b.label;
+    el.addEventListener('click', b.onClick);
+    return el;
+  }));
+  box.classList.toggle('hidden', !buttons.length);
+}
+
+async function detailOf(res) {
+  // an error body is not guaranteed to be JSON; parsing it blindly
+  // replaced the real failure with a JSON syntax error. A validation
+  // error's detail is a *list* of objects, which stringifies to
+  // "[object Object]" — pull the messages out instead.
+  let d = `${res.status} ${res.statusText}`;
+  try {
+    const det = (await res.json()).detail;
+    if (typeof det === 'string' && det) d = det;
+    else if (Array.isArray(det)) d = det.map(x => x.msg || '').filter(Boolean).join(' ') || d;
+  } catch {}
+  return d;
+}
+
+// Every message in the app goes through here, so there is exactly one
+// place to look for one. It clears itself: a failure that outlives the
+// render that caused it starts describing the wrong thing. The dwell
+// scales with length — a long sentence needs longer to read — and it
+// fades, so a message leaving isn't mistaken for a new one arriving.
+const _dwell = new WeakMap();
+function flash(el, text, isError = false, ms) {
+  clearTimeout(_dwell.get(el));
+  el.classList.remove('fade');
+  el.classList.toggle('err', !!isError);
+  el.textContent = text;
+  if (!text) return;
+  _dwell.set(el, setTimeout(() => {
+    el.classList.add('fade');
+    setTimeout(() => {
+      if (!el.classList.contains('fade')) return;  // replaced mid-fade
+      el.textContent = '';
+      el.classList.remove('err', 'fade');
+    }, 250);
+  }, ms ?? Math.min(12000, 4000 + text.length * 60)));
+}
+const setStatus = (text, isError, ms) => flash($('status'), text, isError, ms);
+
+function fail(message) {
+  // a dead server surfaces only as fetch's own opaque wording;
+  // everything else arrives as a sentence already, from
+  // explain_load_failure or from the engine's own validation
+  setStatus(/failed to fetch|load failed|networkerror/i.test(message)
+    ? "Lost contact with the server — check it's still running."
+    : message, true);
+  overlay(null);
+}
+
+// A checkpoint this machine has never seen is a multi-gigabyte
+// download, and the model picker puts it one click away. Ask before
+// committing to it rather than starting one behind a spinner.
+function askToDownload() {
+  return new Promise(resolve => {
+    overlay('asking');
+    setLabel('Download the voice model? This happens once per model.');
+    setActions([
+      { label: 'Download', primary: true, onClick: () => resolve(true) },
+      { label: 'Cancel', onClick: () => resolve(false) },
+    ]);
+  });
+}
+
+// Cancel is real, not cosmetic: the fetch runs server-side in a
+// killable subprocess (engine._Download), so DELETE actually stops the
+// transfer. Part-downloaded blobs are kept and resumed next time.
+async function runDownload(model) {
+  // no argument = the active checkpoint; a model id = a voice's pinned
+  // checkpoint, which the header selector may not even list
+  const t0 = Date.now();
+  let bytes = null, stopping = false;
+  const paint = () => setLabel(
+    `Downloading the voice model${fmtBytes(bytes) ? ` — ${fmtBytes(bytes)} so far` : ''}… ${elapsed(t0)}`);
+  overlay('loading');
+  paint();
+  setActions([{ label: 'Cancel', onClick: async () => {
+    stopping = true;
+    setActions([]);
+    setLabel('Cancelling…');
+    try { await fetch('/model/download', { method: 'DELETE' }); } catch {}
+  } }]);
+  try {
+    const started = await fetch('/model/download', model ? {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model }),
+    } : { method: 'POST' });
+    if (!started.ok) throw new Error(await detailOf(started));
+    // already cached — nothing to poll for
+    if ((await started.json()).state === 'done') { modelCached = true; return true; }
+    for (;;) {
+      await sleep(1000);
+      const s = await (await fetch('/model/download')).json();
+      bytes = s.bytes;
+      if (s.state === 'done') { modelCached = true; return true; }
+      if (s.state === 'cancelled') { overlay(null); return false; }
+      if (s.state === 'failed') { fail(s.error); return false; }
+      if (!stopping) paint();
+    }
+  } catch (e) { fail(e.message); return false; }
+}
+
+// only the local load and the render itself — the download is its own
+// phase above, with its own bytes and its own Cancel
+function startProgress(force, warm) {
+  const t0 = Date.now();
+  const paint = () => setLabel(warm
+    ? `${force ? 'Regenerating' : 'Generating'}… ${elapsed(t0)}`
+    : `Loading the voice model… ${elapsed(t0)}\nUsually under a minute.`);
+  overlay('loading');
+  paint();
+  progressTimer = setInterval(paint, 1000);
+}
+
+function stopProgress() { clearInterval(progressTimer); progressTimer = null; }
+
+async function generate(force) {
+  const text = $('text').value.trim();
+  if (!text) { setStatus('Enter some text first.'); return; }
+  // the model selector too: /speak holds the model for the whole
+  // render, so a switch clicked now would only sit blocked behind it —
+  // better to say so than to look ignored
+  $('go').disabled = $('regen').disabled = $('modelSelBtn').disabled = true;
+  setStatus('');
+  try {
+    // warm/cached can go stale under an open page (a server restart, a
+    // switch raced against /health) — re-ask before deciding anything
+    // that hangs a download question on them
+    await loadHealth();
+    // a checkpoint that isn't here yet is a download to agree to, not a
+    // wait to discover halfway through. Two ways to need one: the
+    // selector's active model, or a checkpoint the chosen voice pins
+    // (which /speak would otherwise fetch silently, gigabytes behind a
+    // "Generating…" label with no working Cancel).
+    const v = voicesById[$('voice').value];
+    const pinned = (v && v.model) || null;
+    const needsPinned = pinned && v.model_cached === false;
+    const needsActive = !pinned && !modelWarm && !modelCached;
+    if (needsActive || needsPinned) {
+      if (!await askToDownload()) { overlay(null); return; }
+      if (!await runDownload(needsPinned ? pinned : null)) return;
+      if (needsPinned) v.model_cached = true;
+    }
+    // the output card carries the wait — the eye is already there, and
+    // it keeps the previous take from looking like the new one. A voice
+    // pinned to a checkpoint other than the active one is a cold load
+    // whatever modelWarm says: /speak switches models to render it.
+    startProgress(force, modelWarm && (!pinned || pinned === activeModel));
+    const res = await fetch('/speak', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        text, voice: $('voice').value,
+        cache: $('useCache').checked && !force,
+        speed: Number($('speed').value),
+      }),
+    });
+    if (!res.ok) throw new Error(await detailOf(res));
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    // the previous take's blob URL is unreachable once replaced here;
+    // unrevoked, every render of a session stays pinned in memory
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = url;
+    $('player').src = url;
+    $('dl').href = url;
+    // voice + first words + yymmdd-hhmm, e.g. narrator_en-review-each-safety-260828-1432.wav
+    const slug = text.toLowerCase().replace(/[^a-z0-9\s]/g, '')
+      .trim().split(/\s+/).slice(0, 4).join('-') || 'speech';
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const stamp = `${String(d.getFullYear()).slice(2)}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+    $('dl').download = `${$('voice').value}-${slug}-${stamp}.wav`;
+    hasAudio = true;
+    // one shared context: Safari caps how many may exist at once, so a
+    // fresh one per render eventually stops decoding waveforms
+    audioCtx = audioCtx || new AudioContext();
+    const buf = await audioCtx.decodeAudioData(await blob.arrayBuffer());
+    waveBuf = buf;
+    drawWave(buf);
+    const note = res.headers.get('X-TTS-Note');
+    // longer dwell: this one asks you to listen to the clip it is about
+    setStatus(note ? `⚠ ${note}` : '', false, 15000);
+    loadHealth();
+  } catch (e) {
+    fail(e.message);
+  } finally {
+    stopProgress();
+    $('result').classList.remove('loading', 'asking');
+    setActions([]);
+    $('go').disabled = $('regen').disabled = $('modelSelBtn').disabled = false;
+  }
+}
+$('go').addEventListener('click', () => generate(false));
+$('regen').addEventListener('click', () => generate(true));
+
+$('reload').addEventListener('click', async () => {
+  try {
+    const r = await (await fetch('/voices/reload', { method: 'POST' })).json();
+    const bad = (r.problems || []).length;
+    // a manifest problem is the one thing here worth interrupting for
+    note(bad
+      ? `⚠ ${r.problems[0]}${bad > 1 ? ` (+${bad - 1} more)` : ''}`
+      : `${r.voices} voices, ${r.pronunciations} pronunciations`, bad > 0);
+    loadVoices();
+  } catch { note("Lost contact with the server — check it's still running.", true); }
+});
+
+$('clearCache').addEventListener('click', async () => {
+  try {
+    const r = await (await fetch('/cache/clear', { method: 'POST' })).json();
+    note(r.files
+      ? `Cleared ${r.files} clip${r.files === 1 ? '' : 's'} (${r.bytes >= 1e6 ? fmtBytes(r.bytes) : 'under 1 MB'})`
+      : 'The cache was already empty');
+    loadHealth();
+  } catch { note("Lost contact with the server — check it's still running.", true); }
+});
+
+// -- saved preferences (this browser only) --
+// every write to the settings note goes through here: setting the text
+// without also settling the colour left a previous warning's red on the
+// next, unrelated message
+const note = (text, isError = false) => flash($('reloadNote'), text, isError);
+const PREFS_KEY = 'tts-prefs';
+$('saveSettings').addEventListener('click', () => {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      voice: $('voice').value,
+      speed: Number($('speed').value),
+      cache: $('useCache').checked,
+      model: $('modelSel').value,
+    }));
+    note('Settings saved');
+  } catch { note('Could not save (storage blocked)', true); }
+});
+function loadPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || null; }
+  catch { return null; }
+}
+
+async function init() {
+  // a page opened while the server is still starting (or restarting)
+  // used to die here silently — empty pickers, nothing said. Keep
+  // trying instead: both loaders are idempotent, so a half-successful
+  // attempt costs nothing to redo.
+  try {
+    await Promise.all([loadVoices(), loadModels()]);
+  } catch {
+    setStatus("Can't reach the server yet — retrying…", true, 2500);
+    setTimeout(init, 2000);
+    return;
+  }
+  const p = loadPrefs();
+  if (p) {
+    if (p.voice && voicesById[p.voice]) { $('voice').value = p.voice; applyVoice(); }
+    if (p.speed) { $('speed').value = p.speed; showSpeed(); }
+    if (typeof p.cache === 'boolean') $('useCache').checked = p.cache;
+    if (p.model && [...$('modelSel').options].some(o => o.value === p.model)
+        && $('modelSel').value !== p.model) {
+      $('modelSel').value = p.model;
+      $('modelSel').dispatchEvent(new Event('change'));
+    }
+  }
+  loadHealth();
+}
+init();
+</script>
+</body>
+</html>

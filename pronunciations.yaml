@@ -1,0 +1,17 @@
+# Pronunciation lexicon — word/phrase -> respelling, applied to text
+# before synthesis (case-insensitive, whole words, longest match wins).
+# Fix a mispronounced word once here and it is fixed for every future
+# script. Reload with the "Reload config" button or POST /voices/reload.
+#
+# Respelling tricks (no phoneme input on this model, so spell it how it
+# should sound): hyphens force syllable breaks, spaces split compounds,
+# "sounds-like" spellings fix odd words.
+
+checkpoint: "check-point"
+VAT: "V-A-T"
+
+# Examples — uncomment/adapt as needed:
+# nginx: "engine-ex"
+# SQL: "sequel"
+# kubectl: "koob-control"
+# LLM: "L.L.M."
