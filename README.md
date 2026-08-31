@@ -232,6 +232,101 @@ uncomment the example at the foot of `voices.yaml`, reload, and pick
 it. It downloads on first use, takes voice packs instead of presets,
 and ignores `style`.
 
+## The script check
+
+The Check button answers one question — *what will the model actually be
+asked to say, and what will read badly* — deterministically, offline,
+in milliseconds. There is no second model involved: Qwen3-TTS is a
+speech model with no text-out path, so an AI-style critique was never
+on the table. Everything shown is derived from what the engine already
+computes on the way to a render.
+
+`check.py` holds the findings; `languages.py` holds the per-language
+data they lean on and knows nothing about any backend, so a model
+change cannot rot it.
+
+**A finding may only describe behaviour that will actually happen.**
+This is the rule the whole feature rests on, and breaking it is easy:
+an early version ran the English acronym rule over German text and
+reported `NICHT → N-I-C-H-T`, a rewrite the engine would never perform.
+It looked like a helpful check and was a lie. So every finding that
+describes normalisation is gated on what the *live* backend does — and
+that gate is obtained by **probing** the engine (send `"Test 1"`, see
+whether `"one"` comes back), never by re-deriving `normalize_text`'s
+own condition. A copy of that condition would be a second source of
+truth, and the way it fails is by promising a rewrite that never
+happens.
+
+The probe is also what keeps the panel model-agnostic. Seven of the
+eleven findings are gated on nothing at all, because chunking, length,
+punctuation and language are properties of the *text* and stay true
+whichever model renders it.
+
+### Language mismatch
+
+The finding that earns the feature. The engine picks normalisation from
+the **voice's** language and never looks at the text, so German typed
+against an English voice really is read with English numbers — and
+until this existed, the only way to discover that was to listen to the
+take. It ruins a whole clip rather than a word.
+
+Detection is function-word scoring, with diacritics corroborating and
+CJK script blocks deciding outright. Four decisions worth keeping:
+
+- **Words shared between languages are kept, not pruned.** A shared word
+  lifts every language that has it by the same amount, so it never moves
+  them relative to each other; it only separates them collectively from
+  the languages that don't. Pruning was tried and is strictly worse — it
+  strips `la`, `le` and `il` from the Romance languages, which are the
+  most frequent words they have.
+- **Each word is worth `1 / (languages sharing it)`.** Without this, a
+  runner-up sharing most of the winner's vocabulary trails by only the
+  handful of unique words, and one short sentence never clears the
+  margin.
+- **The failure mode is silence, never a confident wrong answer.** The
+  thresholds in `languages.py` are tuned for that: a spurious "this
+  looks like French" on a short line teaches people to ignore the panel,
+  which costs more than the check is worth. `languages.CORPUS` pins the
+  behaviour and `python engine.py check` runs it.
+- **Detection covers more languages than the manifest offers.** Italian
+  pasted into an English voice is *more* wrong than German is, not less,
+  so it gets a message saying there is no voice for it rather than no
+  message at all. Languages never offered and languages withdrawn reach
+  the same branch, so nothing in the code knows the difference.
+
+### Wording
+
+Findings are written for someone **writing a script**, not someone
+editing configuration: no filenames, no environment variables, no
+milliseconds. "Recorded in 3 parts", not "synthesised as 3 chunks with a
+120 ms gap". The manifest checks in `engine.check_voice` are the
+deliberate exception — they name `voice_pack` and `ref_audio` because
+their reader really is editing `voices.yaml`.
+
+Dismissing a note means *"I have read this"*, not *"never show me this
+again"*: nothing is persisted, and the next Check says the same thing if
+it still applies. A note that could be permanently silenced would
+eventually be silenced on a script where it mattered.
+
+### Two details that were bugs first
+
+- Rewrites are highlighted by **character span**, taken from the diff
+  opcodes — never by searching for the replacement text. One replacement
+  can be a single comma, and searching for that marks every comma in the
+  script.
+- The filter that hides "dash became comma" **must not strip hyphens**.
+  Hyphenation is the entire mechanism behind `A-P-I` and `check-point`,
+  so a change that only adds hyphens is the most meaningful kind, not
+  the least.
+
+### Why adding a language is low-risk
+
+`spoken_text()` runs *before* `cache_key()`, so cache keys are computed
+over the rewritten text. Changing a normalisation rule therefore
+invalidates exactly the lines it touches — no `RENDER_REV` bump, no
+stale audio, and the orphaned renders fall out through the usual LRU
+eviction.
+
 ## What survives a model swap
 
 The service is built around a `Backend` — one class per model family,
