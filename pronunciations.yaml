@@ -1,17 +1,25 @@
 # Pronunciation lexicon — word/phrase -> respelling, applied to text
-# before synthesis (case-insensitive, whole words, longest match wins).
-# Fix a mispronounced word once here and it is fixed for every future
-# script. Reload with the "Reload config" button or POST /voices/reload.
+# before synthesis (whole words, longest match wins). Fix a mispronounced
+# word once here and it is fixed for every future script. Reload with the
+# "Reload config" button or POST /voices/reload.
 #
 # Respelling tricks (no phoneme input on this model, so spell it how it
 # should sound): hyphens force syllable breaks, spaces split compounds,
 # "sounds-like" spellings fix odd words.
+#
+# CASE: an ALL-CAPS key matches only all-caps text, because it names a
+# thing rather than a word — `VAT` must not rewrite "a vat of oil".
+# Every other key matches case-insensitively.
+#
+# ACRONYMS: unknown 2–5 letter all-caps tokens are spelled out
+# automatically (API -> "A-P-I"), so most need no entry at all. Add one
+# only to override that — an acronym said as a word, or one the letters
+# get wrong.
 
 checkpoint: "check-point"
-VAT: "V-A-T"
 
 # Examples — uncomment/adapt as needed:
 # nginx: "engine-ex"
-# SQL: "sequel"
+# SQL: "sequel"            # said as a word, not spelled out
 # kubectl: "koob-control"
-# LLM: "L.L.M."
+# JIRA: "jeera"

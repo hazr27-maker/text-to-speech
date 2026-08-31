@@ -212,41 +212,61 @@ def get_voice(voice_id: str) -> dict:
 
 _lexicon: dict[str, str] = {}
 _lexicon_re: re.Pattern | None = None
+_lexicon_cased_re: re.Pattern | None = None
+
+
+def _is_acronym_key(key: str) -> bool:
+    """An all-caps key is a name, not a word: VAT the tax, not vat the
+    tub. Matching those case-insensitively rewrote the ordinary noun
+    too, so they match case-sensitively and everything else doesn't."""
+    return key.isupper() and any(c.isalpha() for c in key)
 
 
 def load_lexicon() -> dict[str, str]:
     """(Re)read pronunciations.yaml — a flat map of word/phrase ->
     respelling, applied to text before synthesis. Missing file = empty."""
-    global _lexicon, _lexicon_re
+    global _lexicon, _lexicon_re, _lexicon_cased_re
     if LEXICON_FILE.exists():
         with open(LEXICON_FILE, encoding="utf-8") as f:
             _lexicon = {str(k): str(v) for k, v in (yaml.safe_load(f) or {}).items()}
     else:
         _lexicon = {}
-    if _lexicon:
+
+    def compile_keys(keys: list[str], flags: int = 0) -> re.Pattern | None:
         # longest keys first so "check point" wins over "check"
-        keys = sorted(_lexicon, key=len, reverse=True)
-        _lexicon_re = re.compile(
-            r"\b(" + "|".join(re.escape(k) for k in keys) + r")\b", re.IGNORECASE
+        keys = sorted(keys, key=len, reverse=True)
+        if not keys:
+            return None
+        return re.compile(
+            r"\b(" + "|".join(re.escape(k) for k in keys) + r")\b", flags
         )
-    else:
-        _lexicon_re = None
+
+    _lexicon_cased_re = compile_keys([k for k in _lexicon if _is_acronym_key(k)])
+    _lexicon_re = compile_keys(
+        [k for k in _lexicon if not _is_acronym_key(k)], re.IGNORECASE
+    )
     return _lexicon
 
 
+def _lexicon_loaded() -> bool:
+    return bool(_lexicon) or _lexicon_re is not None or _lexicon_cased_re is not None
+
+
 def lexicon() -> dict[str, str]:
-    if not _lexicon and _lexicon_re is None:
+    if not _lexicon_loaded():
         load_lexicon()
     return dict(_lexicon)
 
 
 def apply_lexicon(text: str) -> str:
-    if not _lexicon and _lexicon_re is None:
+    if not _lexicon_loaded():
         load_lexicon()
-    if _lexicon_re is None:
-        return text
-    lowered = {k.lower(): v for k, v in _lexicon.items()}
-    return _lexicon_re.sub(lambda m: lowered[m.group(0).lower()], text)
+    if _lexicon_cased_re is not None:
+        text = _lexicon_cased_re.sub(lambda m: _lexicon[m.group(0)], text)
+    if _lexicon_re is not None:
+        lowered = {k.lower(): v for k, v in _lexicon.items()}
+        text = _lexicon_re.sub(lambda m: lowered[m.group(0).lower()], text)
+    return text
 
 
 # ---------------------------------------------------------------- normalization
@@ -315,6 +335,75 @@ def _number_repl(m: re.Match) -> str:
     return whole
 
 
+def _digits(s: str) -> str:
+    """Digit by digit, the way a reference code or phone number is read.
+    Zero is "oh" — "zero" is how you read a quantity, not a sequence."""
+    return " ".join("oh" if c == "0" else _n2w(int(c)) for c in s if c.isdigit())
+
+
+def _sequence_repl(m: re.Match) -> str:
+    """A run of digits that is an identifier rather than a quantity, so
+    the grouping is preserved as pauses: 0800 123 4567 is three groups,
+    not four thousand five hundred and sixty-seven."""
+    groups = re.split(r"[\s.–-]+", m[0].strip())
+    return ", ".join(_digits(g) for g in groups if g)
+
+
+def _version_repl(m: re.Match) -> str:
+    return " point ".join(_n2w(int(p)) for p in m[0].split("."))
+
+
+def _year_repl(m: re.Match) -> str:
+    return _year_words(int(m[1]))
+
+
+def _meridiem(word: str, m: re.Match) -> str:
+    """"ay em" / "pee em", keeping a full stop that was doing double
+    duty. In "9 a.m. He agreed." one dot both abbreviates and ends the
+    sentence; consuming it silently ran the two sentences together."""
+    said = "ay em" if word.lstrip()[0].lower() == "a" else "pee em"
+    if word.endswith("."):
+        rest = m.string[m.end():]
+        if not rest.strip() or re.match(r"\s+[\"'“‘(]?[A-Z]", rest):
+            return said + "."
+    return said
+
+
+def _hour_ampm_repl(m: re.Match) -> str:
+    """"9 a.m." — an hour with a meridiem but no minutes, which the
+    clock rule (which requires :MM) never sees."""
+    return f"{_n2w(int(m[1]))} {_meridiem(m[2], m)}"
+
+
+#: All-caps tokens left alone. Two kinds: acronyms everyone says as a
+#: word, and ordinary words that appear in capitals for emphasis —
+#: lettering "N-O-T" out of "This is NOT allowed" is the failure this
+#: second group exists to prevent.
+_SAID_AS_WORD = {
+    "NASA", "NATO", "SCUBA", "RADAR", "LASER", "ASAP", "OPEC", "AIDS",
+    "SIM", "PIN", "RAM", "ROM", "GIF", "JPEG", "PNG", "WIFI", "OSHA",
+    "FAQ", "ZIP", "SWOT", "OKR", "SMART", "OK",
+    "NOT", "ALL", "NEW", "NOW", "YES", "YOU", "THE", "AND", "FOR", "BUT",
+    "CAN", "ARE", "IS", "IT", "AN", "AS", "AT", "BE", "BY", "DO", "GO",
+    "IF", "IN", "NO", "OF", "ON", "OR", "SO", "TO", "UP", "WE", "WILL",
+    "MUST", "ONLY", "MORE", "LESS", "BEST", "FREE", "HERE", "THIS",
+    "THAT", "WHEN", "WHY", "HOW", "WHO", "ANY", "ONE", "TWO", "SEE",
+    "USE", "ADD", "GET", "PUT", "END", "TOP", "OWN", "DAY", "WAY",
+}
+
+
+def _acronym_repl(m: re.Match) -> str:
+    """Spell out an unglossed acronym. Left to itself the model guesses
+    between lettering and word-ing, and guesses differently between
+    takes; hyphens are the same lever pronunciations.yaml already uses.
+    Anything with a lexicon entry never reaches here — the lexicon runs
+    first and its replacement is no longer all-caps."""
+    word = m[0]
+    if word in _SAID_AS_WORD:
+        return word
+    return "-".join(word)
+
+
 _TYPOGRAPHY = [
     (re.compile(r"[“”]"), '"'),
     (re.compile(r"[‘’]"), "'"),
@@ -326,15 +415,37 @@ _NUM = r"(\d(?:[\d,]*\d)?)"  # digits with inner commas; never eats a trailing c
 
 _RANGE_RE = re.compile(r"\b(\d+)\s*[–—-]\s*(\d+)\b")
 
+# Rules run in order over the whole string, so each one only ever sees
+# what its predecessors left behind. Times and money are consumed early
+# (they own their digits); the bare-number rule is deliberately last.
 _NORMALIZE_EN = [
+    # clock times, then an hour carrying a meridiem on its own
     (re.compile(r"\b(\d{1,2}):(\d{2})\s*(a\.m\.|p\.m\.|am\b|pm\b)?", re.IGNORECASE), _time_repl),
-    (re.compile(r"\b(a\.m\.|am)\b(?=\s|$)"), "ay em"),
-    (re.compile(r"\b(p\.m\.|pm)\b(?=\s|$)"), "pee em"),
+    (re.compile(r"\b(\d{1,2})\s*(a\.m\.|p\.m\.|am|pm)\b", re.IGNORECASE), _hour_ampm_repl),
+    # a bare "am" is the verb far more often than the meridiem, and only
+    # the dotted spelling is unambiguous enough to rewrite on its own
+    (re.compile(r"\b(a\.m\.|p\.m\.)(?=\s|$)", re.IGNORECASE), lambda m: _meridiem(m[1], m)),
     (re.compile(r"([€$£])\s?" + _NUM + r"(?:\.(\d{1,2}))?"), _currency_repl),
     (re.compile(_NUM + r"(?:\.(\d+))?\s?%"), lambda m: _number_repl(m) + " percent"),
+    # before the digit/letter split below, which would strip the suffix
     (re.compile(r"\b(\d+)(?:st|nd|rd|th)\b"), lambda m: num2words(int(m[1]), to="ordinal")),
-    (re.compile(r"\b([12]\d{3})\b"), lambda m: _year_words(int(m[1]))),
+    # phone numbers and reference codes. Kept narrow on purpose — only
+    # shapes no one writes for a quantity: a leading zero, nine or more
+    # unbroken digits, or three separated groups.
+    (re.compile(r"\b0\d[\d\s–-]{5,}\d\b"), _sequence_repl),
+    (re.compile(r"\b\d{9,}\b"), _sequence_repl),
+    (re.compile(r"\b\d{3,4}[\s–-]\d{3,4}[\s–-]\d{3,4}\b"), _sequence_repl),
+    (re.compile(r"\b\d+(?:\.\d+){2,}\b"), _version_repl),  # 4.2.1
+    (re.compile(r"\b(\d+):(\d+)\b"), lambda m: f"{_n2w(int(m[1]))} to {_n2w(int(m[2]))}"),
+    (re.compile(r"(?<![\w-])-(?=\d)"), "minus "),
+    # 5GB / 60mph / F1 / IPv6 — a digit welded to letters is read as one
+    # nonsense word ("fiveGB"), so give the two halves a boundary
+    (re.compile(r"(?<=\d)(?=[A-Za-z])|(?<=[A-Za-z])(?=\d)"), " "),
+    (re.compile(r"\b([12]\d{3})\b"), _year_repl),
     (re.compile(_NUM + r"(?:\.(\d+))?"), _number_repl),
+    (re.compile(r"\b[A-Z]{2,5}\b"), _acronym_repl),
+    # a semicolon or colon is a real breath; the model gives neither one
+    (re.compile(r"\s*[;:]\s+"), ", "),
 ]
 
 
@@ -696,7 +807,21 @@ def explain_load_failure(exc: BaseException | str) -> str:
 
 # ---------------------------------------------------------------- chunking
 
-_SENTENCE_RE = re.compile(r"(?<=[.!?。！？])\s+")
+#: Abbreviations whose full stop does not end a sentence. Splitting
+#: after "Dr." puts a chunk boundary — and its silence gap — inside a
+#: phrase, and restarts the model's prosody mid-thought.
+_ABBREV = (
+    "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc",
+    "e.g", "i.e", "fig", "no", "vol", "approx", "inc", "ltd", "co",
+    "dept", "est", "min", "max", "p", "pp", "ch", "sec",
+)
+
+_SENTENCE_RE = re.compile(
+    r"(?<=[.!?。！？])"
+    + "".join(rf"(?<!\b{re.escape(a)}\.)" for a in _ABBREV)
+    + r"\s+",
+    re.IGNORECASE,
+)
 
 
 def chunk_text(text: str, max_chars: int = MAX_CHARS) -> list[str]:

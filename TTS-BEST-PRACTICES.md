@@ -12,24 +12,35 @@ Practical guidance for getting clean voice-overs out of this service
   intonation. A paragraph with no commas gets read in one breathless run.
 - **Numbers are normalized automatically** (English voices): clock
   times, €/$/£ currency, percentages, ordinals (28th), years, digit
-  ranges (3–5), and plain numbers are expanded to words before the model
-  sees them. Check what the model will actually be asked to say with
-  `POST /normalize` if a reading surprises you.
+  ranges (3–5), negatives (−5), ratios and scores (16:9, 3–1), version
+  numbers (4.2.1), phone numbers and long reference codes (read digit by
+  digit), and plain numbers are all expanded to words before the model
+  sees them. A digit stuck to letters is separated too, so "5GB" and
+  "F1" are read rather than mangled into one word. Check what the model
+  will actually be asked to say with `POST /normalize` if a reading
+  surprises you.
+- **Acronyms are spelled out automatically.** Any unfamiliar 2–5 letter
+  all-caps word (API, NHS, SLA) becomes "A-P-I". Ones said as words
+  (NASA, SCUBA) are left alone. If yours is read the wrong way, put it in
+  `pronunciations.yaml` once — `SQL: "sequel"` for a pronounceable one —
+  rather than respelling it in every script.
 - **Still spell out yourself:**
   - Units and symbols: "&" → "and", "/" → "or" (or "per"), "km" → "kilometres".
-  - Acronyms: initialisms with dots, spaces, or hyphens ("A.P.I.",
-    "V-A-T"), or respell pronounceable ones ("sequel" for SQL) — ideally
-    once, in `pronunciations.yaml`, not in every script.
-  - URLs, file paths, version numbers: rewrite as you'd say them
-    ("app dot py", "version two point one").
-- **Keep emphasis in the wording,** not in formatting — ALL CAPS,
-  asterisks, and markdown do nothing (or get read strangely).
+  - URLs and file paths: rewrite as you'd say them ("app dot py").
+- **Keep emphasis in the wording,** not in formatting — asterisks and
+  markdown do nothing. Avoid ALL CAPS for emphasis in particular: a short
+  capitalised word is treated as an acronym, so "this is NOT allowed"
+  risks being read "N-O-T". Common words are exempted, but italics-style
+  emphasis belongs in the sentence, not the casing.
 
 ## Fixing mispronunciations
 
 - Add a line to `pronunciations.yaml` (`word: "respelling"`), press
   **Reload config**, regenerate. The fix is permanent and applies to all
   future scripts; the cache invalidates exactly the lines it touches.
+- **Case matters for one kind of key.** An ALL-CAPS entry matches only
+  all-caps text, so `VAT: "V-A-T"` fixes the tax without touching "a vat
+  of oil". Everything else matches regardless of case.
 - Respelling tricks: hyphens force syllable breaks ("check-point"),
   spaces split compounds, sounds-like spellings fix odd words
   ("koob-control"), stress can often be nudged by doubling a letter or
