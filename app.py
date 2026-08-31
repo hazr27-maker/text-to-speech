@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import check as script_check
 import engine
 
 app = FastAPI(title="Local TTS")
@@ -252,6 +253,30 @@ def normalize(req: NormalizeRequest):
             "Reload the page to refresh the list.",
         )
     return {"text": engine.spoken_text(req.text, voice)}
+
+
+class CheckRequest(BaseModel):
+    # Deliberately not capped at MAX_TEXT: text that is too long to
+    # render is exactly the case the check exists to warn about, so
+    # refusing it here would hide the finding. The wider cap is only a
+    # guard against pathological input.
+    text: str = Field(min_length=1, max_length=engine.MAX_TEXT * 20)
+    voice: str
+
+
+@app.post("/check")
+def check(req: CheckRequest):
+    """What the model will be asked to say, and what will read badly.
+    Advisory only: nothing is synthesised, cached, or changed."""
+    try:
+        voice = engine.get_voice(req.voice)
+    except engine.VoiceError:
+        raise HTTPException(
+            status_code=404,
+            detail=f'There\'s no voice called "{req.voice}". '
+            "Reload the page to refresh the list.",
+        )
+    return script_check.check(req.text, voice)
 
 
 @app.get("/health")

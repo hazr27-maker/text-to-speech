@@ -1344,9 +1344,16 @@ if __name__ == "__main__":
                 check_voice(entry)
             except ManifestError as exc:
                 problems.append(str(exc))
+        # Language detection is checked here too: it is the other thing
+        # that can be wrong without anything failing, and one command
+        # for "is the config sound" is easier to remember than two.
+        # Imported late so the engine keeps no dependency on it.
+        import languages
+        problems.extend(languages.selftest())
         for line in dict.fromkeys(problems):
             print(line, file=sys.stderr)
-        print(f"{len(voices())} voices, {len(set(problems))} problem(s) "
+        print(f"{len(voices())} voices, {len(languages.CORPUS)} detection "
+              f"cases, {len(set(problems))} problem(s) "
               f"against backend {runtime.backend.name!r}")
         sys.exit(1 if problems else 0)
     else:

@@ -206,6 +206,24 @@ Korean, plus `auto` — so adding a language is a manifest entry, not
 code. `python engine.py list-languages` prints what the live checkpoint
 accepts.
 
+**What we ship is narrower than what the model can do.** `voices.yaml`
+offers European languages only: English, German, French and Spanish.
+The Japanese, Korean and Chinese voices were removed to keep the picker
+unambiguous — a decision about this service's scope, not a limitation.
+The checkpoint still speaks all three, and restoring them is three
+manifest entries and a "Reload config", with no code change.
+
+**Non-English voices carry an English accent.** Every non-English entry
+uses `speaker: Ryan`, because CustomVoice ships no German, French or
+Spanish voice identity — its nine presets are English, Chinese,
+Japanese and Korean natives. German text spoken by an English preset is
+German with an English accent, and no manifest or text setting changes
+that. A convincing native voice needs a different model family — Piper
+and other families ship voices recorded by native speakers, and cloning
+from a reference clip is the other route. Check a family's actual
+language list before committing to it; they differ, and not all of them
+cover German.
+
 **There is no English-native female preset** — Ryan and Aiden are both
 male. Options: point a female preset at English (`speaker: Serena`,
 `language: English`) and audition the accent, or use **Kokoro-82M**,
@@ -233,6 +251,7 @@ so settings fall into three tiers:
 | `speed` (manifest, `/speak`, UI slider) | ffmpeg `atempo` on the cached base render, never a model argument |
 | manifest keys `id`, `label`, `gender`, `tags` | the caller-facing contract and the picker; no model sees them |
 | manifest key `model` | names the checkpoint a voice needs — the mechanism is the same whatever that checkpoint is |
+| `languages.py`, `POST /check` | language detection is stopword scoring over plain text, and the chunk, length and punctuation findings describe the *text* — all true whichever model renders it |
 
 ### Declared by the backend
 
@@ -246,6 +265,7 @@ cache into duplicate renders of identical audio.
 | `language` (manifest) | `language` | a family with no per-call language argument |
 | `TTS_TEMPERATURE`, `TTS_REP_PENALTY` | `sampling` | Kokoro and any non-autoregressive family |
 | `speaker:` / `voice_pack:` / `ref_audio:` | listed in `sources` | each other — a `voice_pack` on a Qwen checkpoint is refused, not mis-synthesised |
+| number expansion, and the Check findings that describe it | `expands_numbers` | Kokoro, whose own front-end reads digits better than a rewrite would |
 
 `GET /health` reports the active family's capabilities and sources;
 `python engine.py list-backends` prints them for all families.
@@ -256,9 +276,8 @@ cache into duplicate renders of identical audio.
 |---|---|
 | `TTS_MODEL_ID`, `TTS_MODELS` | Hugging Face repo ids; family inferred from the id, or append `#backend` (`acme/Mystery-TTS#kokoro`) when it can't be |
 | `speaker:` values (Ryan, Aiden, …) | CustomVoice's nine presets; another family has different ones, or none |
-| English number expansion | exists *because* Qwen reads digits poorly; a family with a real G2P front-end sets `expands_numbers = False` and gets raw text |
 | Stutter warning threshold | `Backend.stutter_secs_per_char` — a sampling model repeats words, a deterministic one doesn't |
-| `_NORMALIZE_EN` in `engine.py` | English rules; other languages get the typography pass only |
+| `_NORMALIZE_EN` in `engine.py` | English rules; other languages get the typography pass only. Which of them run is the backend's call (above), not the rules' — they exist because Qwen reads digits poorly, and a family with a real G2P front-end is handed the raw text instead |
 
 ### Adding a family
 
@@ -290,6 +309,14 @@ voice. Voices without one follow the model selector.
   matches only all-caps text, so `VAT` doesn't rewrite "vat"; unknown
   acronyms are spelled out automatically, so most need no entry.
   `POST /normalize` shows exactly what the model will be asked to say.
+- **Check before you record**: the Check button shows the text as the
+  model will receive it — numbers written out, acronyms spelled, your
+  respellings applied — and flags what will read badly: a script whose
+  language doesn't match the chosen voice, a sentence too long to be
+  spoken in one piece, missing punctuation. It records nothing and
+  changes nothing, so ignoring every note and pressing Generate is fine.
+  Notes can be dismissed individually; the next Check says them again if
+  they still apply. Turn the button off in settings if you don't want it.
 - **Awkward delivery**: the Regenerate button re-rolls the take.
 - **Script-writing guidance**: `TTS-BEST-PRACTICES.md`.
 - **Models**: the top-right dropdown switches checkpoints — the 1.7B
@@ -300,7 +327,9 @@ voice. Voices without one follow the model selector.
   each voice's `style` text, so the voice set silently flattens into
   one delivery. Add their ids to `TTS_MODELS` if you want them anyway.
 - **Checking the manifest**: `python engine.py check` reports voices
-  the active checkpoint can't render ("Reload config" shows the same).
+  the active checkpoint can't render ("Reload config" shows the same),
+  and runs the language-detection corpus in the same pass — the two
+  things that can be wrong while everything still appears to work.
 - **Cache**: rendered clips accumulate in `cache/`, kept under
   `TTS_CACHE_MAX_MB` (500 MB default; `off` = unbounded) by dropping
   the least recently used after a render — never the one just made.
@@ -351,6 +380,7 @@ CLI, a build script, another project) can drive the same service.
 | `POST /speak` | `{text, voice, cache, speed}` → `audio/wav` |
 | `GET /voices` | the manifest that drives the picker and any client |
 | `POST /normalize` | `{text, voice}` → what the model will actually be asked to say |
+| `POST /check` | `{text, voice}` → that, plus rewrites, parts, and findings. Advisory: nothing is recorded or cached |
 | `GET /pronunciations` | the active lexicon |
 | `POST /voices/reload` | re-read `voices.yaml` + `pronunciations.yaml`; the model stays warm |
 | `GET /health` | active model, backend capabilities, loaded/downloaded state, limits |

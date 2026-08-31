@@ -34,6 +34,11 @@
 #   russian, japanese, korean (or "auto").
 #   Verify with: python engine.py list-languages
 #
+#   This manifest offers European languages only. That is a decision
+#   about what this service ships, not a limit of the checkpoint — the
+#   Japanese, Korean and Chinese entries were removed to keep the picker
+#   unambiguous, and adding them back is three entries, nothing else.
+#
 # `speed` (optional, 0.5–1.5, default 1.0) — pitch-preserving tempo
 # applied after synthesis. Pacing can also be steered naturally via the
 # style text ("speak slowly and deliberately"). A per-request `speed`
@@ -111,30 +116,6 @@
   language: Spanish
   style: "Narrador de e-learning tranquilo y claro, ritmo pausado."
   tags: [training, narration, spanish]
-
-- id: narrator_ja
-  label: "ナレーター"
-  speaker: Ono_Anna
-  gender: female
-  language: Japanese
-  style: "落ち着いた明瞭なイーラーニングのナレーション。"
-  tags: [training, narration, japanese]
-
-- id: narrator_ko
-  label: "내레이터"
-  speaker: Sohee
-  gender: female
-  language: Korean
-  style: "차분하고 명확한 이러닝 내레이션."
-  tags: [training, narration, korean]
-
-- id: narrator_zh
-  label: "旁白"
-  speaker: Serena
-  gender: female
-  language: Chinese
-  style: "平静清晰的课程旁白，语速适中。"
-  tags: [training, narration, chinese]
 
 # --- Kokoro example (commented; uncomment after `pip` has the weights) ---
 #

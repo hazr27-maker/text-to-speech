@@ -22,6 +22,8 @@
     /* corner radii: cards, controls, and the small things inside them */
     --r-lg: 10px; --r: 8px; --r-sm: 6px;
     --danger: #b3261e;
+    /* a third register: this will still render, but look at it */
+    --warn: #8a5a00; --warn-bg: #fdf6e6; --warn-line: #e6cf9a;
     --chevron: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%236f6b63' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
   @media (prefers-color-scheme: dark) {
@@ -32,6 +34,7 @@
       --accent-ink: #0e1512; --wave: #4d9c74; --hover: #282723;
       --btn: #2a2925; --btn-hover: #35332d;
       --danger: #f08a80;
+      --warn: #d9a441; --warn-bg: #2b2519; --warn-line: #4a3d22;
       --ring: rgba(77, 156, 116, .25);
       --chevron: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%2398938a' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     }
@@ -292,9 +295,22 @@
   /* a manifest problem is a sentence, not a status word: let it take its
      own row rather than squeezing the buttons into two lines each */
   #reloadNote.err { flex-basis: 100%; }
-  .setting input[type=checkbox] { accent-color: var(--accent); width: 1rem; height: 1rem; }
-  /* plain label beside a control: opt out of the eyebrow treatment */
-  .setting label { all: unset; cursor: pointer; }
+  /* Sit on the label's first line, not centred against all of them: a
+     label long enough to wrap would otherwise float its checkbox into
+     the middle of the paragraph. The margin reproduces where centring
+     put it on a single line, so short rows are unchanged. */
+  .setting input[type=checkbox] {
+    accent-color: var(--accent); width: 1rem; height: 1rem;
+    align-self: flex-start; margin-top: .15rem;
+  }
+  /* plain label beside a control: opt out of the eyebrow treatment.
+     `flex: 1 1 0` is load-bearing, not tidiness: flex sorts items into
+     lines by their *max-content* width before any shrinking happens, so
+     a label wider than the space left beside its checkbox is pushed
+     onto its own line whole — checkbox stranded above, text orphaned
+     below. A zero basis lets the text wrap inside the item instead, and
+     makes the row hold any length of label. */
+  .setting label { all: unset; cursor: pointer; flex: 1 1 0; min-width: 0; }
   #dl { color: var(--accent); font-weight: 600; font-size: var(--fs-sm); padding: .4rem .75rem; }
   #dl:hover { color: var(--accent-hover); }
   #count { font-size: var(--fs-xs); color: var(--muted); margin-left: auto; }
@@ -381,7 +397,47 @@
        their size — they are the tap target. */
     #loadingLabel { font-size: var(--fs-xs); }
   }
-</style>
+
+  /* ---- the check panel -------------------------------------------------
+     Surfaces follow the existing rule: the card is --panel, so the
+     recessed quote of what will be said sits on --bg, and each note
+     sits back up on --panel. */
+  #spokenBox { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: .7rem .8rem; }
+  .checkHead { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .4rem; }
+  #spoken { font-size: var(--fs-sm); line-height: 1.55; }
+  #spoken .chg { background: var(--warn-bg); border-bottom: 1px solid var(--warn-line); border-radius: 3px; padding: 0 .1em; }
+  #changes { margin-top: .7rem; display: flex; flex-wrap: wrap; gap: .35rem; }
+  #changes:empty { display: none; }
+  .chip { font-size: var(--fs-xs); background: var(--btn); border: 1px solid var(--line); border-radius: 999px; padding: .2rem .55rem; color: var(--muted); }
+  .chip b { color: var(--ink); font-weight: 500; }
+  #findings { margin-top: .9rem; display: flex; flex-direction: column; gap: .5rem; }
+  #findings:empty { display: none; }
+  .find { display: flex; gap: .6rem; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); }
+  .find .dot { flex: none; width: .5rem; height: .5rem; border-radius: 50%; margin-top: .42rem; background: var(--muted); }
+  .find.warn { background: var(--warn-bg); border-color: var(--warn-line); }
+  .find.warn .dot { background: var(--warn); }
+  .find.ok .dot { background: var(--accent); }
+  .find .body { min-width: 0; flex: 1; }
+  .find .t { font-size: var(--fs-sm); }
+  .find .d { font-size: var(--fs-xs); color: var(--muted); margin-top: .2rem; line-height: 1.5; }
+  .find .tok { font-size: var(--fs-xs); margin-top: .3rem; overflow-wrap: anywhere; }
+  /* Dismiss is a flex sibling, not an absolutely positioned overlay, so
+     it can never sit on top of the text beside it at a narrow width. */
+  .find .x {
+    flex: none; align-self: flex-start;
+    display: flex; align-items: center; justify-content: center;
+    width: 1.35rem; height: 1.35rem; margin: -.1rem -.25rem 0 0;
+    padding: 0; border: 0; border-radius: var(--r-sm);
+    background: none; color: var(--muted); cursor: pointer;
+  }
+  .find .x svg { width: .7em; height: .7em; }
+  .find .x:hover { background: var(--btn-hover); color: var(--ink); }
+  .find .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #chunkBox { margin-top: .9rem; }
+  #chunkBox:empty { display: none; }
+  .chunk { font-size: var(--fs-xs); color: var(--muted); border-left: 2px solid var(--line); padding: .15rem 0 .15rem .6rem; margin-top: .35rem; line-height: 1.5; }
+  .chunk b { color: var(--ink); font-weight: 500; }
+  </style>
 </head>
 <body>
 <div class="wrap">
@@ -413,10 +469,22 @@
     <div class="row">
       <button class="primary" id="go">Generate</button>
       <button id="regen" title="Re-roll: synthesis is sampled, so a re-render often fixes an awkward reading. Bypasses and overwrites the cache.">Regenerate</button>
+      <button id="checkBtn" title="Show what the model will be asked to say, and flag anything that will read oddly. Nothing is recorded.">Check</button>
       <!-- role="status" = polite live region: failures and the stutter
            warning must reach a screen reader, not just the sighted -->
       <span id="status" role="status"></span>
     </div>
+  </div>
+
+  <div class="card hidden" id="checkCard">
+    <label>Check</label>
+    <div id="spokenBox">
+      <div class="checkHead">What the model will be asked to say</div>
+      <div id="spoken"></div>
+    </div>
+    <div id="changes"></div>
+    <div id="findings"></div>
+    <div id="chunkBox"></div>
   </div>
 
   <div class="card hidden" id="result">
@@ -442,6 +510,10 @@
       <div class="setting">
         <input type="checkbox" id="useCache" checked>
         <label for="useCache">Use cache (re-serve identical lines instantly)</label>
+      </div>
+      <div class="setting">
+        <input type="checkbox" id="allowCheck" checked>
+        <label for="allowCheck">Allow Check (preview what will be said before recording)</label>
       </div>
       <div class="setting">
         <button id="reload" title="Re-read voices.yaml and pronunciations.yaml without restarting">Reload config</button>
@@ -1114,6 +1186,7 @@ $('saveSettings').addEventListener('click', () => {
       voice: $('voice').value,
       speed: Number($('speed').value),
       cache: $('useCache').checked,
+      allowCheck: $('allowCheck').checked,
       model: $('modelSel').value,
     }));
     note('Settings saved');
@@ -1141,15 +1214,117 @@ async function init() {
     if (p.voice && voicesById[p.voice]) { $('voice').value = p.voice; applyVoice(); }
     if (p.speed) { $('speed').value = p.speed; showSpeed(); }
     if (typeof p.cache === 'boolean') $('useCache').checked = p.cache;
+    if (typeof p.allowCheck === 'boolean') $('allowCheck').checked = p.allowCheck;
     if (p.model && [...$('modelSel').options].some(o => o.value === p.model)
         && $('modelSel').value !== p.model) {
       $('modelSel').value = p.model;
       $('modelSel').dispatchEvent(new Event('change'));
     }
   }
+  applyAllowCheck();
   loadHealth();
 }
 init();
+
+// ---------------------------------------------------------------- check
+//
+// Deterministic, offline, no model. Everything shown comes from the same
+// functions /speak uses, so the panel cannot disagree with the render.
+
+// Highlight by character span, walking backwards so earlier offsets stay
+// valid as we splice. Not by string search: one of these replacements
+// can be a single comma, and searching for that marks every comma in the
+// script. Sentinels first, then escape, so the markers survive escaping.
+function markSpans(text, spans) {
+  let out = text;
+  for (const [a, b] of [...spans].reverse()) {
+    out = out.slice(0, a) + '\u0001' + out.slice(a, b) + '\u0002' + out.slice(b);
+  }
+  return esc(out).replace(/\u0001/g, '<span class="chg">')
+                 .replace(/\u0002/g, '</span>');
+}
+
+const rewriteChips = changes => changes.map(c =>
+  `<span class="chip">${esc(c.from)} &rarr; <b>${esc(c.to)}</b></span>`
+).join('');
+
+function renderCheck(r) {
+  $('spoken').innerHTML = markSpans(r.spoken, r.spans);
+  $('changes').innerHTML = rewriteChips(r.changes);
+  $('findings').innerHTML = r.findings.map(f => `
+    <div class="find ${f.level}">
+      <span class="dot"></span>
+      <span class="body">
+        <span class="t">${esc(f.title)}</span>
+        <div class="d">${esc(f.detail)}</div>
+        ${f.token ? `<div class="tok">${esc(f.token)}</div>` : ''}
+      </span>
+      <button class="x" aria-label="Dismiss this note" title="Dismiss">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </div>`).join('');
+  $('chunkBox').innerHTML = r.chunks.length > 1
+    ? '<div class="checkHead">Parts</div>' + r.chunks.map((c, i) =>
+        `<div class="chunk"><b>${i + 1}</b> &mdash; ${esc(c)}</div>`).join('')
+    : '';
+  $('checkCard').classList.remove('hidden');
+}
+
+async function runCheck() {
+  const text = $('text').value.trim();
+  if (!text) { setStatus('Nothing to check yet.'); return; }
+  $('checkBtn').disabled = true;
+  try {
+    const res = await fetch('/check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, voice: $('voice').value }),
+    });
+    const r = await res.json();
+    if (!res.ok) { fail(r.detail || 'The check failed.'); return; }
+    renderCheck(r);
+    const warns = r.findings.filter(f => f.level === 'warn').length;
+    setStatus(warns
+      ? `${warns} thing${warns > 1 ? 's' : ''} worth a look before you record.`
+      : 'Nothing that will read oddly.');
+  } catch (e) {
+    fail(String(e));
+  } finally {
+    $('checkBtn').disabled = false;
+  }
+}
+
+// Delegated, so it keeps working across re-renders without rebinding.
+// Dismissing means "I have read this", not "never show me this again":
+// the next check is a fresh reading and says so again if it still applies.
+$('findings').addEventListener('click', e => {
+  const btn = e.target.closest('.x');
+  if (!btn) return;
+  const row = btn.closest('.find');
+  const next = row.nextElementSibling || row.previousElementSibling;
+  row.remove();
+  // The :empty rule that collapses this box cannot see past the
+  // whitespace the template literal leaves behind, so clear it outright
+  // once the last note goes — otherwise dismissing everything holds a
+  // gap open where the notes used to be.
+  const box = $('findings');
+  if (!box.querySelector('.find')) box.innerHTML = '';
+  // keep the keyboard where the reader was, not back at the top
+  (next ? next.querySelector('.x') : $('checkBtn'))?.focus();
+});
+
+$('checkBtn').addEventListener('click', runCheck);
+
+// The button is hidden rather than disabled when the setting is off: a
+// greyed control advertises something you cannot use and offers no route
+// to enabling it. The card goes with it — a panel left standing would
+// describe a check you can no longer re-run.
+function applyAllowCheck() {
+  const on = $('allowCheck').checked;
+  $('checkBtn').classList.toggle('hidden', !on);
+  if (!on) $('checkCard').classList.add('hidden');
+}
+$('allowCheck').addEventListener('change', applyAllowCheck);
 </script>
 </body>
 </html>
