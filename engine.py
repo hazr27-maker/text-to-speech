@@ -105,6 +105,21 @@ REPETITION_PENALTY = float(os.environ.get("TTS_REP_PENALTY", "1.1"))
 # leaves headroom so MP3/AAC encoding can't overshoot into clipping.
 LOUDNESS_LUFS = os.environ.get("TTS_LOUDNESS_LUFS", "-16")
 LOUDNESS_TP = os.environ.get("TTS_LOUDNESS_TP", "-1.0")
+# The model emits ~80ms of silence at each end of every chunk. Left in,
+# it is dead air at the head of every clip, and it stacks with the gap
+# between chunks — a 120ms setting produced a ~280ms join. Trimming per
+# chunk is what makes TTS_CHUNK_GAP_MS mean what it says. `off` keeps
+# the model's own edges.
+TRIM_SILENCE = os.environ.get("TTS_TRIM_SILENCE", "on").strip().lower() not in (
+    "off", "0", "false", "no",
+)
+# Silence kept either side of speech after trimming: enough that an
+# onset never sounds clipped, far less than the model's own padding.
+TRIM_PAD_MS = int(os.environ.get("TTS_TRIM_PAD_MS", "20"))
+#: Bumped whenever the render pipeline changes the audio for identical
+#: input. It is part of the cache key, so old renders retire instead of
+#: being served alongside new ones that sound different.
+RENDER_REV = "2"
 
 
 class VoiceError(KeyError):
@@ -884,8 +899,14 @@ def stutter_threshold(voice: dict) -> float:
 def cache_key(voice: dict, text: str) -> str:
     """Everything that can change the audio, and nothing that can't: a
     field the active backend ignores is left out, so it doesn't split
-    the cache. A plain `speaker` hashes to its bare name, which is what
-    it always did — existing renders stay valid."""
+    the cache. A plain `speaker` hashes to its bare name.
+
+    The post-processing settings are in here too, because two renders of
+    the same words are not the same clip if one was trimmed or levelled
+    differently. RENDER_REV covers the steps that have no setting to
+    hash — bumping it retires every stale render at once, which is what
+    keeps a pipeline change from serving old and new audio side by side.
+    """
     kind, value = voice_source(voice)
     caps = runtime.backend.caps
     h = hashlib.sha256()
@@ -896,6 +917,8 @@ def cache_key(voice: dict, text: str) -> str:
         voice.get("style", "") if "instruct" in caps else "",
         # retargeting loudness must invalidate the cached renders
         f"{LOUDNESS_LUFS}/{LOUDNESS_TP}",
+        f"rev{RENDER_REV}/gap{CHUNK_GAP_MS}/"
+        f"trim{TRIM_PAD_MS if TRIM_SILENCE else 'off'}",
         text,
     ):
         h.update(part.encode("utf-8"))
@@ -1025,7 +1048,11 @@ def _normalize_loudness(src: Path, dst: Path, sr: int, target: float) -> bool:
     a reason to fail a render."""
     if shutil.which("ffmpeg") is None:
         return False
-    filt = f"loudnorm=I={target}:TP={LOUDNESS_TP}:LRA=11"
+    # dual_mono matters because every render here is mono. EBU R128 sums
+    # channel energies, so the same audio measures 3 LU louder the moment
+    # an editor lays it on a stereo timeline — which is where these clips
+    # always end up. Without this, a clip normalised to -16 plays at -13.
+    filt = f"loudnorm=I={target}:TP={LOUDNESS_TP}:LRA=11:dual_mono=true"
     try:
         probe = subprocess.run(
             ["ffmpeg", "-hide_banner", "-nostats", "-i", str(src),
@@ -1050,6 +1077,34 @@ def _normalize_loudness(src: Path, dst: Path, sr: int, target: float) -> bool:
         return True
     except (subprocess.SubprocessError, json.JSONDecodeError, KeyError, OSError):
         return False
+
+
+def _trim_silence(audio: np.ndarray, sr: int) -> np.ndarray:
+    """Drop the near-silence the model pads each chunk with, keeping
+    TRIM_PAD_MS either side.
+
+    Done in numpy rather than through ffmpeg's `silenceremove` on
+    purpose: ffmpeg is an optional dependency here, and chunk spacing is
+    not a nicety that may quietly stop working when it is absent. It
+    also avoids a subprocess per chunk.
+
+    The threshold is relative to the clip's own peak, because trimming
+    happens *before* loudness normalisation — an absolute dBFS floor
+    would cut a quiet render to nothing and leave a loud one untouched.
+    """
+    if not TRIM_SILENCE or audio.size == 0:
+        return audio
+    mag = np.abs(audio)
+    peak = float(mag.max())
+    if peak <= 0:
+        return audio  # digital silence: nothing to find
+    loud = np.flatnonzero(mag > peak * 0.01)  # -40 dB relative to peak
+    if loud.size == 0:
+        return audio
+    pad = int(sr * TRIM_PAD_MS / 1000)
+    start = max(0, int(loud[0]) - pad)
+    end = min(audio.size, int(loud[-1]) + 1 + pad)
+    return audio[start:end]
 
 
 def _stretch(src: Path, dst: Path, speed: float) -> None:
@@ -1132,7 +1187,7 @@ def speak(
                 voice.get("language", "English") if "language" in caps else "",
                 voice.get("style", "") if "instruct" in caps else "",
             )
-            pieces.append(audio)
+            pieces.append(_trim_silence(audio, sr))
 
     gap = np.zeros(int(sr * CHUNK_GAP_MS / 1000), dtype=np.float32)
     joined = pieces[0]

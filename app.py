@@ -271,6 +271,7 @@ def health():
         "max_chars": engine.MAX_CHARS,
         "max_text": engine.MAX_TEXT,
         "chunk_gap_ms": engine.CHUNK_GAP_MS,
+        "trim_silence": engine.TRIM_SILENCE,
         "loudness_lufs": engine.loudness_target(),
         # "./cache" rather than "cache", which reads like a stray word
         "cache_dir": str(engine.CACHE_DIR) if engine.CACHE_DIR.is_absolute()

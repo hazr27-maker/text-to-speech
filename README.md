@@ -20,8 +20,9 @@ services awkward:
   from cache, instantly.
 - **Consistency matters more than perfection.** A voice is defined once
   in `voices.yaml` (preset, language, style, pacing) and every line
-  rendered through it matches. Loudness is normalised to a broadcast
-  target, so clips don't jump in volume played back to back.
+  rendered through it matches. Clips are trimmed to a tight handle and
+  levelled to a broadcast target, so they drop onto a timeline without
+  jumping in volume or carrying dead air.
 - **Some words are always read wrong.** Numbers, dates, phone numbers
   and acronyms are normalised before the model sees them, and anything
   still wrong gets a respelling in `pronunciations.yaml` — applied
@@ -226,6 +227,7 @@ so settings fall into three tiers:
 | `pronunciations.yaml` | text → text, applied before anything model-specific (the *format* is portable; the entries are tuned to what your model gets wrong, so audition after a swap) |
 | `TTS_CACHE_DIR`, `TTS_CACHE_MAX_MB` | a folder of WAVs keyed by content — the key includes the model id, so families can't serve each other's audio |
 | `TTS_MAX_CHARS`, `TTS_MAX_TEXT`, `TTS_CHUNK_GAP_MS` | chunking splits plain text on sentence boundaries and stitches WAVs |
+| `TTS_TRIM_SILENCE`, `TTS_TRIM_PAD_MS` | a threshold scan over the samples; every family pads its output with silence |
 | `TTS_LOUDNESS_LUFS`, `TTS_LOUDNESS_TP` | ffmpeg `loudnorm` on the finished render |
 | `TTS_VOICES_FILE`, `TTS_LEXICON_FILE` | file paths |
 | `speed` (manifest, `/speak`, UI slider) | ffmpeg `atempo` on the cached base render, never a model argument |

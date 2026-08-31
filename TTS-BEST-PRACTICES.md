@@ -75,6 +75,14 @@ Practical guidance for getting clean voice-overs out of this service
   with a -1 dBTP ceiling, so clips sit at a consistent volume when played
   back-to-back and won't clip when encoded into a video. You should not
   need to touch gain in your editor.
+- **Don't be alarmed if your meter reads about -19.** These files are
+  mono, and the loudness standard counts a mono file differently from a
+  stereo one. They are levelled so that they hit -16 LUFS *once they are
+  on a stereo timeline*, which is where they end up. Measured on its own
+  a clip reads roughly 3 LU lower; that is correct, not quiet.
+- **Clips start and end tight.** The model pads each render with about
+  80ms of silence; that is trimmed to a 20ms handle, so you can butt
+  clips up against each other without trimming dead air by hand.
 - **Very short, punchy clips** (a single word like "Stop.") can come out
   slightly quieter than the rest. They hit the peak ceiling before
   reaching the loudness target — the only way louder is compression,
@@ -97,10 +105,13 @@ Practical guidance for getting clean voice-overs out of this service
   approved WAVs; don't assume you can re-create one identically later.
   (Locally, the cache does return the same file until the text changes.)
 - **Joins between chunks are uniform.** Text over ~350 characters is
-  split on sentence boundaries and rejoined with a fixed short pause, so
-  a break between two paragraphs sounds the same as one mid-paragraph.
-  For a long section where pacing matters, render paragraph by paragraph
-  and assemble in your editor, where you control the gaps.
+  split on sentence boundaries and rejoined with a fixed short pause
+  (120ms, and now exactly that — chunk edges are trimmed first, so the
+  model's own padding no longer stacks on top of it). Uniform is the
+  limitation: a break between two paragraphs sounds the same as one
+  mid-paragraph. For a long section where pacing matters, render
+  paragraph by paragraph and assemble in your editor, where you control
+  the gaps.
 
 ## Workflow
 
