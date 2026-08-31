@@ -308,7 +308,60 @@ voice. Voices without one follow the model selector.
   `POST /cache/clear`) empties it. Everything re-synthesises on demand,
   so losing a clip costs render time only — but it *is* a cache: use
   the Download button for anything you mean to keep.
-- Architecture, API reference, and config env vars: see `claude.md`.
+- **Why the code does what it does**: `engine.py` carries its own
+  reasoning at the point of each decision — the cache key contract, the
+  loudness and trimming choices, and the normalisation rule order are
+  documented where they are implemented, not in a separate file that can
+  drift away from them.
+
+## Config (env vars)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `TTS_MODEL_ID` | `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit` | checkpoint active at boot |
+| `TTS_MODELS` | 1.7B CustomVoice, 8-bit + 4-bit | comma-separated selector list |
+| `TTS_CACHE_DIR` | `./cache` | rendered WAVs |
+| `TTS_CACHE_MAX_MB` | `500` | cache ceiling; LRU eviction past it, `off` = unbounded |
+| `TTS_MAX_CHARS` | `350` | chunk size |
+| `TTS_MAX_TEXT` | `5000` | per-request character cap (served via `/health`) |
+| `TTS_CHUNK_GAP_MS` | `120` | silence stitched between chunks |
+| `TTS_TRIM_SILENCE` | `on` | trim the model's ~80 ms padding from each chunk edge; `off` keeps it |
+| `TTS_TRIM_PAD_MS` | `20` | silence kept either side of speech when trimming |
+| `TTS_VOICES_FILE` | `voices.yaml` | alternate manifest |
+| `TTS_LEXICON_FILE` | `pronunciations.yaml` | alternate lexicon |
+| `TTS_LOUDNESS_LUFS` | `-16` | EBU R128 target; `off` disables normalisation |
+| `TTS_LOUDNESS_TP` | `-1.0` | true-peak ceiling in dBTP |
+| `TTS_TEMPERATURE` | `0.9` | sampling temperature (lower = steadier, flatter) |
+| `TTS_REP_PENALTY` | `1.1` | repetition penalty (higher = fewer stutters) |
+
+`TTS_MODEL_ID` and `TTS_MODELS` entries may carry a `#backend` suffix
+(`acme/Mystery-TTS#kokoro`) to name the model family explicitly; without
+it the family is inferred from the id. Which of these survive a model
+change is covered in
+**[What survives a model swap](#what-survives-a-model-swap)**.
+
+## HTTP API
+
+Everything the web UI does, it does through these — so any client (a
+CLI, a build script, another project) can drive the same service.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /` | the web UI |
+| `POST /speak` | `{text, voice, cache, speed}` → `audio/wav` |
+| `GET /voices` | the manifest that drives the picker and any client |
+| `POST /normalize` | `{text, voice}` → what the model will actually be asked to say |
+| `GET /pronunciations` | the active lexicon |
+| `POST /voices/reload` | re-read `voices.yaml` + `pronunciations.yaml`; the model stays warm |
+| `GET /health` | active model, backend capabilities, loaded/downloaded state, limits |
+| `GET /models`, `POST /model` | list checkpoints / switch to one |
+| `GET`, `POST`, `DELETE /model/download` | progress, start, cancel a checkpoint fetch |
+| `POST /cache/clear` | empty the render cache → `{files, bytes}` |
+
+The service is unauthenticated on a loopback port, so it refuses a
+non-loopback `Host` header and a state-changing request carrying a
+non-local `Origin`. Requests with no `Origin` at all — curl, scripts —
+pass untouched.
 
 ## Uninstall
 
