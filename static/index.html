@@ -8,7 +8,14 @@
   :root {
     color-scheme: light;
     --bg: #f6f5f2; --panel: #ffffff; --ink: #1c1b18; --muted: #6f6b63;
-    --line: #e4e1da; --accent: #2f6f4f; --accent-hover: #275e42;
+    /* --line draws decorative edges: cards, separators, popup surfaces.
+       --line-strong draws the edge of anything you can operate. WCAG
+       1.4.11 wants 3:1 for that, and --line is 1.3:1 against both the
+       card and the field fill it sits between — the three-surface fills
+       are ~1.1:1 apart, so nothing else was identifying a control at
+       rest. Measured: 3.43:1 on card, 3.15:1 on field, 3.07:1 on button. */
+    --line: #e4e1da; --line-strong: #8f8a81;
+    --accent: #2f6f4f; --accent-hover: #275e42;
     --accent-ink: #ffffff; --wave: #2f6f4f; --hover: #f0eee9;
     /* buttons sit one step off the card so they read as raised rather
        than relying on their border alone */
@@ -22,6 +29,8 @@
     /* corner radii: cards, controls, and the small things inside them */
     --r-lg: 10px; --r: 8px; --r-sm: 6px;
     --danger: #b3261e;
+    /* one elevation, for the only surface that floats over another */
+    --shadow: 0 10px 28px rgba(0, 0, 0, .14);
     /* a third register: this will still render, but look at it */
     --warn: #8a5a00; --warn-bg: #fdf6e6; --warn-line: #e6cf9a;
     --chevron: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%236f6b63' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -30,10 +39,13 @@
     :root {
       color-scheme: dark;
       --bg: #161513; --panel: #201f1c; --ink: #ece9e2; --muted: #98938a;
-      --line: #33312c; --accent: #4d9c74; --accent-hover: #5fb287;
+      /* 3.75 / 4.16 / 3.32 against card, page and button */
+      --line: #33312c; --line-strong: #7d786e;
+      --accent: #4d9c74; --accent-hover: #5fb287;
       --accent-ink: #0e1512; --wave: #4d9c74; --hover: #282723;
       --btn: #2a2925; --btn-hover: #35332d;
       --danger: #f08a80;
+      --shadow: 0 10px 28px rgba(0, 0, 0, .45);
       --warn: #d9a441; --warn-bg: #2b2519; --warn-line: #4a3d22;
       --ring: rgba(77, 156, 116, .25);
       --chevron: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%2398938a' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -61,7 +73,7 @@
   label { display: block; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .4rem; }
   textarea {
     width: 100%; background: var(--bg); color: var(--ink);
-    border: 1px solid var(--line); border-radius: var(--r); padding: .6rem .7rem;
+    border: 1px solid var(--line-strong); border-radius: var(--r); padding: .6rem .7rem;
     font: inherit; font-size: var(--fs-sm); resize: vertical;
   }
   /* native resizer can't be themed (paints light chrome), so it's off
@@ -111,7 +123,7 @@
   .speedrow { margin-top: .2rem; }
   .speedrow + .row { margin-top: .9rem; }
   button, .btn {
-    font: inherit; border: 1px solid var(--line); border-radius: var(--r);
+    font: inherit; border: 1px solid var(--line-strong); border-radius: var(--r);
     background: var(--btn); color: var(--ink); padding: .55rem 1rem; cursor: pointer;
     transition: background .12s ease, border-color .12s ease;
   }
@@ -156,7 +168,7 @@
   .combo-btn {
     width: 100%; display: flex; align-items: center; justify-content: space-between;
     gap: .5rem; background: var(--bg); color: var(--ink); text-align: left;
-    border: 1px solid var(--line); border-radius: var(--r); padding: .6rem .7rem;
+    border: 1px solid var(--line-strong); border-radius: var(--r); padding: .6rem .7rem;
     /* `font: inherit` resets size, so the step has to come after it —
        every picker and the textarea sit on --fs-sm, the same step as
        the model selector, so the three values read as one rank */
@@ -193,7 +205,7 @@
     overscroll-behavior: contain;
   }
   .combo[data-mode="overlay"] .combo-list {
-    background: var(--panel); box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
+    background: var(--panel); box-shadow: var(--shadow);
   }
   .combo-group {
     font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .07em;
@@ -223,9 +235,15 @@
      already resizes far more than this when a render lands */
   #status:empty { display: none; }
   #status.err, #reloadNote.err { color: var(--danger); }
+  /* the register between body text and red: this will still work, you
+     just want to look at it. Without it a ⚠ either shouted in --danger
+     or whispered in body ink, and both misdescribed it. */
+  #status.warn, #reloadNote.warn { color: var(--warn); }
   #status.fade, #reloadNote.fade { opacity: 0; }
   #reloadNote { transition: opacity .25s ease; }
-  canvas { width: 100%; height: 96px; display: block; border-radius: var(--r); background: var(--bg); border: 1px solid var(--line); cursor: pointer; }
+  /* the canvas is the scrubber, not a picture — operable, so it takes
+     the operable edge */
+  canvas { width: 100%; height: 96px; display: block; border-radius: var(--r); background: var(--bg); border: 1px solid var(--line-strong); cursor: pointer; }
   .wavebox { position: relative; }
   #loading {
     position: absolute; inset: 0; display: none; overflow: hidden;
@@ -269,7 +287,7 @@
     width: 2.4rem; height: 2.4rem; border-radius: 50%; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
     background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
-    font-size: .9rem; line-height: 1;
+    font-size: var(--fs-sm); line-height: 1;
   }
   #play:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
   #time { font-variant-numeric: tabular-nums; }
@@ -408,7 +426,7 @@
   #spokenBox { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: .7rem .8rem; }
   .checkHead { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .4rem; }
   #spoken { font-size: var(--fs-sm); line-height: 1.55; }
-  #spoken .chg { background: var(--warn-bg); border-bottom: 1px solid var(--warn-line); border-radius: 3px; padding: 0 .1em; }
+  #spoken .chg { background: var(--warn-bg); border-bottom: 1px solid var(--warn-line); border-radius: var(--r-sm); padding: 0 .1em; }
   #changes { margin-top: .7rem; display: flex; flex-wrap: wrap; gap: .35rem; }
   #changes:empty { display: none; }
   .chip { font-size: var(--fs-xs); background: var(--btn); border: 1px solid var(--line); border-radius: 999px; padding: .2rem .55rem; color: var(--muted); }
@@ -1005,11 +1023,17 @@ async function detailOf(res) {
 // render that caused it starts describing the wrong thing. The dwell
 // scales with length — a long sentence needs longer to read — and it
 // fades, so a message leaving isn't mistaken for a new one arriving.
+//
+// Three registers, not two: '' is body ink, 'warn' is amber, 'err' is
+// red. It was a boolean, which forced every ⚠ to pick between shouting
+// and whispering — the stutter note read as ordinary confirmation, and
+// a manifest problem read as a failure. Both are notes.
 const _dwell = new WeakMap();
-function flash(el, text, isError = false, ms) {
+const LEVELS = ['warn', 'err'];
+function flash(el, text, level = '', ms) {
   clearTimeout(_dwell.get(el));
   el.classList.remove('fade');
-  el.classList.toggle('err', !!isError);
+  for (const l of LEVELS) el.classList.toggle(l, level === l);
   el.textContent = text;
   if (!text) return;
   _dwell.set(el, setTimeout(() => {
@@ -1017,11 +1041,11 @@ function flash(el, text, isError = false, ms) {
     setTimeout(() => {
       if (!el.classList.contains('fade')) return;  // replaced mid-fade
       el.textContent = '';
-      el.classList.remove('err', 'fade');
+      el.classList.remove(...LEVELS, 'fade');
     }, 250);
   }, ms ?? Math.min(12000, 4000 + text.length * 60)));
 }
-const setStatus = (text, isError, ms) => flash($('status'), text, isError, ms);
+const setStatus = (text, level, ms) => flash($('status'), text, level, ms);
 
 function fail(message) {
   // a dead server surfaces only as fetch's own opaque wording;
@@ -1029,7 +1053,7 @@ function fail(message) {
   // explain_load_failure or from the engine's own validation
   setStatus(/failed to fetch|load failed|networkerror/i.test(message)
     ? "Lost contact with the server — check it's still running."
-    : message, true);
+    : message, 'err');
   overlay(null);
 }
 
@@ -1168,7 +1192,7 @@ async function generate(force) {
     drawWave(buf);
     const note = res.headers.get('X-TTS-Note');
     // longer dwell: this one asks you to listen to the clip it is about
-    setStatus(note ? `⚠ ${note}` : '', false, 15000);
+    setStatus(note ? `⚠ ${note}` : '', note ? 'warn' : '', 15000);
     loadHealth();
   } catch (e) {
     fail(e.message);
@@ -1189,11 +1213,13 @@ $('reload').addEventListener('click', async () => {
     const r = await (await fetch('/voices/reload', { method: 'POST' })).json();
     const bad = (r.problems || []).length;
     // a manifest problem is the one thing here worth interrupting for
+    // a manifest entry that won't render is worth looking at, not worth
+    // the red reserved for something that actually failed
     note(bad
       ? `⚠ ${r.problems[0]}${bad > 1 ? ` (+${bad - 1} more)` : ''}`
-      : `${r.voices} voices, ${r.pronunciations} pronunciations`, bad > 0);
+      : `${r.voices} voices, ${r.pronunciations} pronunciations`, bad ? 'warn' : '');
     loadVoices();
-  } catch { note("Lost contact with the server — check it's still running.", true); }
+  } catch { note("Lost contact with the server — check it's still running.", 'err'); }
 });
 
 $('clearCache').addEventListener('click', async () => {
@@ -1203,14 +1229,14 @@ $('clearCache').addEventListener('click', async () => {
       ? `Cleared ${r.files} clip${r.files === 1 ? '' : 's'} (${r.bytes >= 1e6 ? fmtBytes(r.bytes) : 'under 1 MB'})`
       : 'The cache was already empty');
     loadHealth();
-  } catch { note("Lost contact with the server — check it's still running.", true); }
+  } catch { note("Lost contact with the server — check it's still running.", 'err'); }
 });
 
 // -- saved preferences (this browser only) --
 // every write to the settings note goes through here: setting the text
 // without also settling the colour left a previous warning's red on the
 // next, unrelated message
-const note = (text, isError = false) => flash($('reloadNote'), text, isError);
+const note = (text, level = '') => flash($('reloadNote'), text, level);
 const PREFS_KEY = 'tts-prefs';
 $('saveSettings').addEventListener('click', () => {
   try {
@@ -1222,7 +1248,7 @@ $('saveSettings').addEventListener('click', () => {
       model: $('modelSel').value,
     }));
     note('Settings saved');
-  } catch { note('Could not save (storage blocked)', true); }
+  } catch { note('Could not save (storage blocked)', 'err'); }
 });
 function loadPrefs() {
   try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || null; }
@@ -1237,7 +1263,7 @@ async function init() {
   try {
     await Promise.all([loadVoices(), loadModels()]);
   } catch {
-    setStatus("Can't reach the server yet — retrying…", true, 2500);
+    setStatus("Can't reach the server yet — retrying…", 'err', 2500);
     setTimeout(init, 2000);
     return;
   }
@@ -1319,7 +1345,7 @@ async function runCheck() {
     const warns = r.findings.filter(f => f.level === 'warn').length;
     setStatus(warns
       ? `${warns} thing${warns > 1 ? 's' : ''} worth a look before you record.`
-      : 'Nothing that will read oddly.');
+      : 'Nothing that will read oddly.', warns ? 'warn' : '');
   } catch (e) {
     fail(String(e));
   } finally {

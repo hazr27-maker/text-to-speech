@@ -461,6 +461,11 @@ setting that forgets the key fails the suite rather than shipping.
   changes nothing, so ignoring every note and pressing Generate is fine.
   Notes can be dismissed individually; the next Check says them again if
   they still apply. Turn the button off in settings if you don't want it.
+- **Messages** appear in one place, the line under Generate, in one of
+  three registers: body text for confirmations, amber for notes worth a
+  look (the stutter warning, a manifest problem, the check summary), red
+  for failures. A note is never red — it would overstate something you
+  are free to ignore.
 - **Awkward delivery**: the Regenerate button re-rolls the take. It is
   enabled only while it would re-roll the clip on screen — same text,
   same voice, same checkpoint — because with nothing rendered, or with
