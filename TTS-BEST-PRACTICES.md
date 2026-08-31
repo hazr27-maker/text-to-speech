@@ -51,7 +51,9 @@ Practical guidance for getting clean voice-overs out of this service
 
 - **Regenerate.** Synthesis is sampled, so the same line reads slightly
   differently each run. An awkward phrase often fixes itself in one or
-  two re-rolls (the Regenerate button bypasses the cache).
+  two re-rolls (the Regenerate button bypasses the cache). It wakes up
+  once you have a take on screen, and greys out again if you edit the
+  text or switch voice — at that point what you want is Generate.
 - **The repeated-word warning.** Sampling occasionally makes the model
   say a word twice ("28th 28th"). When a render comes back longer than
   its text should need, the page says so — *The model may have repeated

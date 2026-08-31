@@ -124,7 +124,10 @@
   button:active:not(:disabled), .btn:active { transform: translateY(1px); }
   button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
   button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-  button:disabled { opacity: .5; cursor: wait; transform: none; }
+  /* two different disabled states: not-applicable (Regenerate with
+     nothing to re-roll) and busy. Only the second is a wait. */
+  button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+  body.busy button:disabled { cursor: wait; }
   button:focus-visible, a:focus-visible,
   input:focus-visible, summary:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px;
@@ -468,7 +471,7 @@
     </div>
     <div class="row">
       <button class="primary" id="go">Generate</button>
-      <button id="regen" title="Re-roll: synthesis is sampled, so a re-render often fixes an awkward reading. Bypasses and overwrites the cache.">Regenerate</button>
+      <button id="regen" disabled>Regenerate</button>
       <button id="checkBtn" title="Show what the model will be asked to say, and flag anything that will read oddly. Nothing is recorded.">Check</button>
       <!-- role="status" = polite live region: failures and the stutter
            warning must reach a screen reader, not just the sighted -->
@@ -793,6 +796,7 @@ $('modelSel').addEventListener('change', async () => {
     combos.model.sync();
     fail(e.message);
   }
+  syncRegen();
 });
 // the manifest's `style` still steers synthesis; it is simply not shown
 function applyVoice() {
@@ -808,10 +812,11 @@ function showSpeed() {
   s.style.setProperty('--fill',
     (s.value - s.min) / (s.max - s.min) * 100 + '%');
 }
-$('voice').addEventListener('change', applyVoice);
+$('voice').addEventListener('change', () => { applyVoice(); syncRegen(); });
 $('speed').addEventListener('input', showSpeed);
 $('text').addEventListener('input', () => {
   showCount();
+  syncRegen();
 });
 
 makeScroller($('text'));
@@ -872,8 +877,31 @@ async function loadHealth() {
 
 let waveBuf = null;
 let hasAudio = false;
+// what the take on screen was rendered from. Regenerate re-rolls *that*
+// take, so it only means anything while the inputs still match it —
+// with none, or with edited text, it was silently a second Generate.
+let lastRender = null;   // {text, voice, model}
 let audioCtx = null;   // shared — see the note where it's first used
 let lastUrl = null;    // the current take's blob URL, revoked on replace
+
+// Regenerate is enabled only when it would re-roll the clip you are
+// listening to: same text, same voice, same checkpoint. Speed is left
+// out on purpose — it is applied after synthesis, so it doesn't make a
+// take stale, and re-rolling at a new speed is a coherent thing to ask.
+function syncRegen() {
+  const v = voicesById[$('voice').value];
+  const model = (v && v.model) || $('modelSel').value;
+  const stale = !lastRender
+    || lastRender.text !== $('text').value.trim()
+    || lastRender.voice !== $('voice').value
+    || lastRender.model !== model;
+  $('regen').disabled = stale;
+  // a disabled button shows no tooltip, so the reason has to be on the
+  // enabled state's absence — say what it does, and let the state say when
+  $('regen').title = stale
+    ? 'Re-rolls the take on screen. Generate one first — after an edit, use Generate.'
+    : 'Re-roll: synthesis is sampled, so a re-render often fixes an awkward reading. Bypasses and overwrites the cache.';
+}
 
 function drawWave(buffer, progress = 0) {
   const canvas = $('wave'), ctx = canvas.getContext('2d');
@@ -1079,6 +1107,7 @@ async function generate(force) {
   // render, so a switch clicked now would only sit blocked behind it —
   // better to say so than to look ignored
   $('go').disabled = $('regen').disabled = $('modelSelBtn').disabled = true;
+  document.body.classList.add('busy');
   setStatus('');
   try {
     // warm/cached can go stale under an open page (a server restart, a
@@ -1130,6 +1159,7 @@ async function generate(force) {
     const stamp = `${String(d.getFullYear()).slice(2)}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
     $('dl').download = `${$('voice').value}-${slug}-${stamp}.wav`;
     hasAudio = true;
+    lastRender = { text, voice: $('voice').value, model: pinned || activeModel };
     // one shared context: Safari caps how many may exist at once, so a
     // fresh one per render eventually stops decoding waveforms
     audioCtx = audioCtx || new AudioContext();
@@ -1146,7 +1176,9 @@ async function generate(force) {
     stopProgress();
     $('result').classList.remove('loading', 'asking');
     setActions([]);
-    $('go').disabled = $('regen').disabled = $('modelSelBtn').disabled = false;
+    document.body.classList.remove('busy');
+    $('go').disabled = $('modelSelBtn').disabled = false;
+    syncRegen();
   }
 }
 $('go').addEventListener('click', () => generate(false));
@@ -1222,6 +1254,7 @@ async function init() {
     }
   }
   applyAllowCheck();
+  syncRegen();   // also puts the button's tooltip on it
   loadHealth();
 }
 init();

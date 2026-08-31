@@ -412,7 +412,12 @@ voice. Voices without one follow the model selector.
   changes nothing, so ignoring every note and pressing Generate is fine.
   Notes can be dismissed individually; the next Check says them again if
   they still apply. Turn the button off in settings if you don't want it.
-- **Awkward delivery**: the Regenerate button re-rolls the take.
+- **Awkward delivery**: the Regenerate button re-rolls the take. It is
+  enabled only while it would re-roll the clip on screen — same text,
+  same voice, same checkpoint — because with nothing rendered, or with
+  the text since edited, it was silently a second Generate rather than a
+  re-roll. Speed is deliberately not part of that: it is applied after
+  synthesis, so changing it doesn't make a take stale.
 - **Script-writing guidance**: `TTS-BEST-PRACTICES.md`.
 - **Models**: the top-right dropdown switches checkpoints — the 1.7B
   CustomVoice at 8-bit (default, best quality) and 4-bit (smaller, more
