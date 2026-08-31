@@ -395,6 +395,55 @@ A voice that pins a `model` makes that checkpoint selectable in the UI
 even if it isn't in `TTS_MODELS`, and `/speak` switches to it for that
 voice. Voices without one follow the model selector.
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests -q          # ~1s, no checkpoint, no network
+```
+
+The whole render pipeline is covered — chunk joins, silence trimming,
+cache hit and miss, LRU eviction, speed variants, loudness — and none of
+it loads a model.
+
+That is what the **`Silence` backend** is for. It is a third adapter
+behind the same `Backend` seam as Qwen and Kokoro: tone where there
+would be speech, and the same ~80 ms of near-silent padding the real
+families put on every chunk. The padding is not decoration — trimming it
+is a pipeline step, and a fake with clean edges would let a broken trim
+pass. It is deterministic, so a test can assert on durations. Select it
+by hand with `TTS_MODEL_ID=local/silence#silence` to run the service
+with no model at all.
+
+`engine.speak` takes the runtime and the pipeline as arguments,
+defaulting to the service's own. That is the only reason any of the
+above is reachable: with the runtime fetched from a module-level
+singleton instead, nothing could get behind the seam from outside.
+
+### The render pipeline owns its own cache key
+
+`RenderPipeline` holds every step applied to the model's audio after
+generation — trim, join, atomic write, loudness, and the speed stretch —
+*and* the fingerprint that identifies them. The two halves are one
+module deliberately.
+
+The cache is keyed on that fingerprint, so a step that changes the audio
+for identical input must change the key. Otherwise old and new renders
+are served side by side and the voice changes between lines, which is
+the one failure this service exists to prevent. While the steps lived in
+`speak()` and the key was assembled by hand in `cache_key()`, keeping
+them in step was something a person had to remember, and `RENDER_REV`
+was the reminder. Now `cache_key()` asks the pipeline for its
+fingerprint and does not know what is in it.
+
+`RENDER_REV` still exists, and still matters: it covers the changes that
+have no setting to hash — the trim algorithm, the join, the ffmpeg
+filter chain. Bump it for those, and every stale render retires at once.
+
+A parametrised test asserts that changing *any* constructor field
+changes both the fingerprint and the resulting cache key, so a new
+setting that forgets the key fails the suite rather than shipping.
+
 ## Day-to-day
 
 - **Voices**: edit `voices.yaml` (no Python), then "Reload config" in

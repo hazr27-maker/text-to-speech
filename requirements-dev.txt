@@ -1,0 +1,2 @@
+# test-only; the service itself needs nothing from this file
+pytest>=8

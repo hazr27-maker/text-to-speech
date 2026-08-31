@@ -617,12 +617,74 @@ class Kokoro(Backend):
         return sorted({k.title() for k in self.LANG_CODES})
 
 
+class Silence(Backend):
+    """A generator with no checkpoint behind it — tone where there would
+    be speech, and the same near-silent padding the real families put on
+    every chunk.
+
+    This is the third adapter, and it is what makes the seam a seam: with
+    only Qwen and Kokoro behind it, nothing could exercise the render
+    pipeline without two gigabytes and a minute of loading, so nothing
+    did. The padding is not decoration — trimming it is a pipeline step,
+    and a fake that emitted clean audio would let a broken trim pass.
+
+    Deterministic, so a test can assert on durations. Select it with
+    `TTS_MODEL_ID=local/silence#silence`.
+    """
+
+    name = "silence"
+    #: no style, no language, no sampling — the pipeline is the subject
+    caps = frozenset()
+    sources = ("speaker", "voice_pack", "ref_audio")
+    expands_numbers = True
+    #: deterministic: it cannot repeat itself, so nothing should trip
+    stutter_secs_per_char = 1e9
+    prefetch = "pass"
+
+    SAMPLE_RATE = 24000
+    #: what the real families pad each chunk with, and what _trim removes
+    PAD_MS = 80
+    #: speech duration per non-space character — near the middle of the
+    #: 12-18 chars/sec the stutter heuristic assumes
+    SECS_PER_CHAR = 0.07
+
+    class _Model:
+        sample_rate = 24000
+
+    class _Segment:
+        def __init__(self, audio, sample_rate):
+            self.audio = audio
+            self.sample_rate = sample_rate
+
+    def load(self, model_id: str):
+        return self._Model()
+
+    def generate(self, model, text, source, language, style):
+        sr = self.SAMPLE_RATE
+        chars = max(1, len(text.replace(" ", "")))
+        n = int(sr * chars * self.SECS_PER_CHAR)
+        t = np.arange(n, dtype=np.float32) / sr
+        speech = 0.25 * np.sin(2 * np.pi * 220.0 * t, dtype=np.float32)
+        pad = np.zeros(int(sr * self.PAD_MS / 1000), dtype=np.float32)
+        return [self._Segment(np.concatenate([pad, speech, pad]), sr)]
+
+    def speakers(self, model):
+        return ["Silence"]
+
+    def languages(self, model):
+        return ["English"]
+
+
 BACKENDS: dict[str, type[Backend]] = {
-    b.name: b for b in (QwenCustomVoice, Kokoro)
+    b.name: b for b in (QwenCustomVoice, Kokoro, Silence)
 }
 DEFAULT_BACKEND = QwenCustomVoice
 # substring of a checkpoint id -> family, for entries that don't say
-_BACKEND_HINTS = (("kokoro", "kokoro"), ("qwen3-tts", "qwen-customvoice"))
+_BACKEND_HINTS = (
+    ("kokoro", "kokoro"),
+    ("qwen3-tts", "qwen-customvoice"),
+    ("silence", "silence"),
+)
 
 
 def backend_for(model_id: str) -> Backend:
@@ -871,14 +933,14 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS) -> list[str]:
 # ---------------------------------------------------------------- cache + speak
 
 
-def voice_backend(voice: dict) -> Backend:
+def voice_backend(voice: dict, rt: "_Runtime | None" = None) -> Backend:
     """The backend that will render this voice — the one it pins, or
     whichever is active. Resolved from the id alone, so callers can ask
     about a voice without loading a model."""
-    return backend_for(voice.get("model") or runtime.model_id)
+    return backend_for(voice.get("model") or (rt or runtime).model_id)
 
 
-def spoken_text(text: str, voice: dict) -> str:
+def spoken_text(text: str, voice: dict, rt: "_Runtime | None" = None) -> str:
     """Exactly what the model will be asked to say: lexicon first, then
     normalisation tuned to that model's front-end. /speak, /normalize
     and the stutter check all go through here so none of them can
@@ -886,39 +948,46 @@ def spoken_text(text: str, voice: dict) -> str:
     return normalize_text(
         apply_lexicon(text),
         voice.get("language", "English"),
-        expand_numbers=voice_backend(voice).expands_numbers,
+        expand_numbers=voice_backend(voice, rt).expands_numbers,
     )
 
 
-def stutter_threshold(voice: dict) -> float:
+def stutter_threshold(voice: dict, rt: "_Runtime | None" = None) -> float:
     """Seconds of audio per character above which a render looks like a
     repetition — a property of the model family, not of the text."""
-    return voice_backend(voice).stutter_secs_per_char
+    return voice_backend(voice, rt).stutter_secs_per_char
 
 
-def cache_key(voice: dict, text: str) -> str:
+def cache_key(
+    voice: dict,
+    text: str,
+    rt: "_Runtime | None" = None,
+    pipe: RenderPipeline | None = None,
+) -> str:
     """Everything that can change the audio, and nothing that can't: a
     field the active backend ignores is left out, so it doesn't split
     the cache. A plain `speaker` hashes to its bare name.
 
     The post-processing settings are in here too, because two renders of
     the same words are not the same clip if one was trimmed or levelled
-    differently. RENDER_REV covers the steps that have no setting to
-    hash — bumping it retires every stale render at once, which is what
-    keeps a pipeline change from serving old and new audio side by side.
+    differently — but this function does not know what they are. It asks
+    the pipeline for its fingerprint, so a step added there cannot be
+    forgotten here.
     """
+    rt = rt or runtime
+    pipe = pipe or pipeline
     kind, value = voice_source(voice)
-    caps = runtime.backend.caps
+    caps = rt.backend.caps
     h = hashlib.sha256()
     for part in (
-        runtime.model_id,
+        rt.model_id,
         value if kind == "speaker" else f"{kind}:{value}",
         voice.get("language", "") if "language" in caps else "",
         voice.get("style", "") if "instruct" in caps else "",
-        # retargeting loudness must invalidate the cached renders
-        f"{LOUDNESS_LUFS}/{LOUDNESS_TP}",
-        f"rev{RENDER_REV}/gap{CHUNK_GAP_MS}/"
-        f"trim{TRIM_PAD_MS if TRIM_SILENCE else 'off'}",
+        # every setting that changes the audio, named by the module that
+        # applies it — retargeting loudness or changing the gap must
+        # invalidate the renders it would no longer describe
+        *pipe.fingerprint(),
         text,
     ):
         h.update(part.encode("utf-8"))
@@ -1032,115 +1101,235 @@ def evict_cache(keep: Iterable[Path] = ()) -> tuple[int, int]:
         return files, freed
 
 
-def loudness_target() -> float | None:
-    """None when normalisation is switched off."""
-    val = LOUDNESS_LUFS.strip().lower()
-    if val in ("", "off", "none", "no"):
-        return None
-    return float(val)
+# ------------------------------------------------------- render pipeline
 
 
-def _normalize_loudness(src: Path, dst: Path, sr: int, target: float) -> bool:
-    """Two-pass EBU R128 normalisation. The first pass measures, the
-    second applies a *linear* gain using those measurements, so the
-    delivery keeps its natural dynamics instead of being compressed.
-    Returns False if it couldn't run — normalisation is a nicety, never
-    a reason to fail a render."""
-    if shutil.which("ffmpeg") is None:
-        return False
-    # dual_mono matters because every render here is mono. EBU R128 sums
-    # channel energies, so the same audio measures 3 LU louder the moment
-    # an editor lays it on a stereo timeline — which is where these clips
-    # always end up. Without this, a clip normalised to -16 plays at -13.
-    filt = f"loudnorm=I={target}:TP={LOUDNESS_TP}:LRA=11:dual_mono=true"
-    try:
-        probe = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-nostats", "-i", str(src),
-             "-af", filt + ":print_format=json", "-f", "null", "-"],
-            capture_output=True, text=True, timeout=120,
-        )
-        start = probe.stderr.rfind("{")
-        end = probe.stderr.rfind("}")
-        if start == -1 or end == -1:
-            return False
-        m = json.loads(probe.stderr[start:end + 1])
-        if "inf" in str(m.get("input_i", "")).lower():
-            return False  # silence: nothing to normalise
-        subprocess.run(
-            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(src),
-             "-af", (f"{filt}:measured_I={m['input_i']}:measured_TP={m['input_tp']}"
-                     f":measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}"
-                     f":offset={m['target_offset']}:linear=true"),
-             "-ar", str(sr), "-c:a", "pcm_s16le", str(dst)],
-            check=True, capture_output=True, timeout=120,
-        )
-        return True
-    except (subprocess.SubprocessError, json.JSONDecodeError, KeyError, OSError):
-        return False
+class RenderPipeline:
+    """Everything done to the model's audio after generation, and the
+    fingerprint that says which "everything" it was.
 
+    The two halves are one module deliberately. The cache is keyed on
+    the fingerprint, so a step that changes the audio for identical
+    input *must* change the key — otherwise old and new renders are
+    served side by side and the voice changes between lines, which is
+    the one failure this service exists to prevent. While the steps and
+    the key lived in separate places that was a thing a person had to
+    remember; here every setting is declared once, and the fingerprint
+    is derived from the same values the steps run on.
 
-def _trim_silence(audio: np.ndarray, sr: int) -> np.ndarray:
-    """Drop the near-silence the model pads each chunk with, keeping
-    TRIM_PAD_MS either side.
-
-    Done in numpy rather than through ffmpeg's `silenceremove` on
-    purpose: ffmpeg is an optional dependency here, and chunk spacing is
-    not a nicety that may quietly stop working when it is absent. It
-    also avoids a subprocess per chunk.
-
-    The threshold is relative to the clip's own peak, because trimming
-    happens *before* loudness normalisation — an absolute dBFS floor
-    would cut a quiet render to nothing and leave a loud one untouched.
+    `rev` covers the steps that have no setting to hash — a change to
+    the trim algorithm, the join, or the ffmpeg filter chain. Bump it
+    and every stale render retires at once.
     """
-    if not TRIM_SILENCE or audio.size == 0:
-        return audio
-    mag = np.abs(audio)
-    peak = float(mag.max())
-    if peak <= 0:
-        return audio  # digital silence: nothing to find
-    loud = np.flatnonzero(mag > peak * 0.01)  # -40 dB relative to peak
-    if loud.size == 0:
-        return audio
-    pad = int(sr * TRIM_PAD_MS / 1000)
-    start = max(0, int(loud[0]) - pad)
-    end = min(audio.size, int(loud[-1]) + 1 + pad)
-    return audio[start:end]
 
+    def __init__(
+        self,
+        *,
+        trim: bool = TRIM_SILENCE,
+        trim_pad_ms: int = TRIM_PAD_MS,
+        gap_ms: int = CHUNK_GAP_MS,
+        loudness_lufs: str = LOUDNESS_LUFS,
+        loudness_tp: str = LOUDNESS_TP,
+        rev: str = RENDER_REV,
+    ) -> None:
+        self.trim = trim
+        self.trim_pad_ms = trim_pad_ms
+        self.gap_ms = gap_ms
+        self.loudness_lufs = str(loudness_lufs)
+        self.loudness_tp = str(loudness_tp)
+        self.rev = rev
 
-def _stretch(src: Path, dst: Path, speed: float) -> None:
-    """Pitch-preserving tempo change via ffmpeg atempo (speed<1 = slower)."""
-    if shutil.which("ffmpeg") is None:
-        raise RuntimeError(
-            'Speed control needs ffmpeg — install it with "brew install ffmpeg".'
-        )
-    fd, tmp = tempfile.mkstemp(dir=CACHE_DIR, suffix=".part.wav")
-    os.close(fd)
-    try:
+    # ------------------------------------------------------- interface
+
+    def render(self, pieces: list[np.ndarray], sr: int, dst: Path) -> None:
+        """Model chunks in, finished base render at `dst`: trimmed,
+        joined with the configured gap, written atomically, levelled.
+
+        Atomic because concurrent requests for the same cache key would
+        otherwise tear the file: temp file in the destination's own
+        directory, then rename.
+        """
+        joined = self.join([self.trim_silence(p, sr) for p in pieces], sr)
+        fd, tmp = tempfile.mkstemp(dir=dst.parent, suffix=".part")
+        os.close(fd)
         try:
+            sf.write(tmp, joined, sr, format="WAV")
+            target = self.loudness_target()
+            if target is not None:
+                fd2, tmp2 = tempfile.mkstemp(dir=dst.parent, suffix=".part.wav")
+                os.close(fd2)
+                try:
+                    if self._normalize_loudness(Path(tmp), Path(tmp2), sr, target):
+                        os.replace(tmp2, tmp)
+                finally:
+                    if os.path.exists(tmp2):
+                        os.unlink(tmp2)
+            os.replace(tmp, dst)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def stretch(self, src: Path, dst: Path, speed: float) -> None:
+        """Pitch-preserving tempo change via ffmpeg atempo (speed<1 =
+        slower). Outside the fingerprint on purpose: the speed is in the
+        filename, so variants sit beside the base render rather than
+        replacing it."""
+        if shutil.which("ffmpeg") is None:
+            raise RuntimeError(
+                'Speed control needs ffmpeg — install it with "brew install ffmpeg".'
+            )
+        fd, tmp = tempfile.mkstemp(dir=dst.parent, suffix=".part.wav")
+        os.close(fd)
+        try:
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+                     "-filter:a", f"atempo={speed}", str(tmp)],
+                    check=True, capture_output=True, timeout=120,
+                )
+            except (subprocess.SubprocessError, OSError):
+                # a wedged or failing ffmpeg must not hang the request; the
+                # base render is untouched, so 1.0x still works
+                raise RuntimeError(
+                    "Couldn't apply the speed change. Try again, or set speed to 1."
+                ) from None
+            os.replace(tmp, dst)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def fingerprint(self) -> tuple[str, ...]:
+        """The parts of the cache key this pipeline owns. Every setting
+        that changes the audio appears here, which is the whole point of
+        the class: `render` and this method read the same fields.
+
+        Two parts rather than one because that is the shape the key
+        already had — a single joined string would rehash every render
+        on disk for no change in behaviour.
+        """
+        return (
+            f"{self.loudness_lufs}/{self.loudness_tp}",
+            f"rev{self.rev}/gap{self.gap_ms}/"
+            f"trim{self.trim_pad_ms if self.trim else 'off'}",
+        )
+
+    def loudness_target(self) -> float | None:
+        """None when normalisation is switched off."""
+        val = self.loudness_lufs.strip().lower()
+        if val in ("", "off", "none", "no"):
+            return None
+        return float(val)
+
+    # -------------------------------------------------- implementation
+
+    def join(self, pieces: list[np.ndarray], sr: int) -> np.ndarray:
+        """Chunks with `gap_ms` of silence between them. Exact, because
+        the model's own padding was trimmed first — stacked with it, a
+        120 ms setting produced a 278 ms join."""
+        gap = np.zeros(int(sr * self.gap_ms / 1000), dtype=np.float32)
+        joined = pieces[0]
+        for piece in pieces[1:]:
+            joined = np.concatenate([joined, gap, piece])
+        return joined
+
+    def trim_silence(self, audio: np.ndarray, sr: int) -> np.ndarray:
+        """Drop the near-silence the model pads each chunk with, keeping
+        `trim_pad_ms` either side.
+
+        Done in numpy rather than through ffmpeg's `silenceremove` on
+        purpose: ffmpeg is an optional dependency here, and chunk spacing
+        is not a nicety that may quietly stop working when it is absent.
+        It also avoids a subprocess per chunk.
+
+        The threshold is relative to the clip's own peak, because trimming
+        happens *before* loudness normalisation — an absolute dBFS floor
+        would cut a quiet render to nothing and leave a loud one untouched.
+        """
+        if not self.trim or audio.size == 0:
+            return audio
+        mag = np.abs(audio)
+        peak = float(mag.max())
+        if peak <= 0:
+            return audio  # digital silence: nothing to find
+        loud = np.flatnonzero(mag > peak * 0.01)  # -40 dB relative to peak
+        if loud.size == 0:
+            return audio
+        pad = int(sr * self.trim_pad_ms / 1000)
+        start = max(0, int(loud[0]) - pad)
+        end = min(audio.size, int(loud[-1]) + 1 + pad)
+        return audio[start:end]
+
+    def _normalize_loudness(
+        self, src: Path, dst: Path, sr: int, target: float
+    ) -> bool:
+        """Two-pass EBU R128 normalisation. The first pass measures, the
+        second applies a *linear* gain using those measurements, so the
+        delivery keeps its natural dynamics instead of being compressed.
+        Returns False if it couldn't run — normalisation is a nicety, never
+        a reason to fail a render."""
+        if shutil.which("ffmpeg") is None:
+            return False
+        # dual_mono matters because every render here is mono. EBU R128 sums
+        # channel energies, so the same audio measures 3 LU louder the moment
+        # an editor lays it on a stereo timeline — which is where these clips
+        # always end up. Without this, a clip normalised to -16 plays at -13.
+        filt = f"loudnorm=I={target}:TP={self.loudness_tp}:LRA=11:dual_mono=true"
+        try:
+            probe = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-nostats", "-i", str(src),
+                 "-af", filt + ":print_format=json", "-f", "null", "-"],
+                capture_output=True, text=True, timeout=120,
+            )
+            start = probe.stderr.rfind("{")
+            end = probe.stderr.rfind("}")
+            if start == -1 or end == -1:
+                return False
+            m = json.loads(probe.stderr[start:end + 1])
+            if "inf" in str(m.get("input_i", "")).lower():
+                return False  # silence: nothing to normalise
             subprocess.run(
-                ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
-                 "-filter:a", f"atempo={speed}", str(tmp)],
+                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(src),
+                 "-af", (f"{filt}:measured_I={m['input_i']}:measured_TP={m['input_tp']}"
+                         f":measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}"
+                         f":offset={m['target_offset']}:linear=true"),
+                 "-ar", str(sr), "-c:a", "pcm_s16le", str(dst)],
                 check=True, capture_output=True, timeout=120,
             )
-        except (subprocess.SubprocessError, OSError):
-            # a wedged or failing ffmpeg must not hang the request; the
-            # base render is untouched, so 1.0x still works
-            raise RuntimeError(
-                "Couldn't apply the speed change. Try again, or set speed to 1."
-            ) from None
-        os.replace(tmp, dst)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+            return True
+        except (subprocess.SubprocessError, json.JSONDecodeError, KeyError, OSError):
+            return False
+
+
+#: The pipeline the service renders through, built from the environment.
+#: Tests construct their own with different settings; `speak` takes one.
+pipeline = RenderPipeline()
+
+
+def loudness_target() -> float | None:
+    """The active pipeline's target — /health reports it."""
+    return pipeline.loudness_target()
 
 
 def speak(
-    text: str, voice_id: str, use_cache: bool = True, speed: float | None = None
+    text: str,
+    voice_id: str,
+    use_cache: bool = True,
+    speed: float | None = None,
+    rt: "_Runtime | None" = None,
+    pipe: RenderPipeline | None = None,
 ) -> Path:
     """Render text with a manifest voice; returns the path to a WAV.
     Cached by content hash — a line is synthesised once, ever. Speed
     variants (0.5–1.5, 1.0 = as generated) are derived from the cached
-    base render with ffmpeg, never by re-synthesising."""
+    base render with ffmpeg, never by re-synthesising.
+
+    `rt` and `pipe` default to the service's own runtime and pipeline.
+    They are arguments so a caller can supply others — a Silence backend
+    and a pipeline with different settings render the whole path here in
+    milliseconds, which is how any of this is tested.
+    """
+    rt = rt or runtime
+    pipe = pipe or pipeline
     voice = get_voice(voice_id)
     if speed is None:
         speed = float(voice.get("speed", 1.0))
@@ -1151,20 +1340,22 @@ def speak(
     # the runtime lock is held from model resolution through the last
     # chunk: the model id is baked into the cache key, so nothing may
     # swap the checkpoint while a render that key describes is running
-    with runtime._lock:
+    with rt._lock:
         # a voice may pin its own checkpoint; do this first, because the
         # model id is part of the cache key and of what the backend can do
         if voice.get("model"):
-            runtime.ensure(voice["model"])
-        check_voice(voice, runtime.backend)
+            rt.ensure(voice["model"])
+        check_voice(voice, rt.backend)
         # cache is keyed on the rewritten text, so a lexicon or normalizer
         # change invalidates exactly the lines it touches
-        text = spoken_text(text, voice)
-        chunks = chunk_text(text)
+        text = spoken_text(text, voice, rt)
+        # MAX_CHARS read here, not bound into chunk_text's default at
+        # import — otherwise changing it has no effect on a render
+        chunks = chunk_text(text, MAX_CHARS)
         if not chunks:
             raise ValueError("Enter some text first.")
 
-        key = cache_key(voice, text)
+        key = cache_key(voice, text, rt, pipe)
         path = CACHE_DIR / f"{key}.wav"
         final = path if speed == 1.0 else CACHE_DIR / f"{key}_x{speed:g}.wav"
         if use_cache and final.exists():
@@ -1172,49 +1363,29 @@ def speak(
             return final
         if use_cache and path.exists():
             _touch(path)
-            _stretch(path, final, speed)
+            pipe.stretch(path, final, speed)
             evict_cache(keep=(final, path))
             return final
 
         source = voice_source(voice)
-        caps = runtime.backend.caps
+        caps = rt.backend.caps
         pieces: list[np.ndarray] = []
         sr = 0
         for chunk in chunks:
-            audio, sr = runtime.synthesize(
+            audio, sr = rt.synthesize(
                 chunk,
                 source,
                 voice.get("language", "English") if "language" in caps else "",
                 voice.get("style", "") if "instruct" in caps else "",
             )
-            pieces.append(_trim_silence(audio, sr))
+            pieces.append(audio)
 
-    gap = np.zeros(int(sr * CHUNK_GAP_MS / 1000), dtype=np.float32)
-    joined = pieces[0]
-    for piece in pieces[1:]:
-        joined = np.concatenate([joined, gap, piece])
-
-    # atomic write: temp file in the same dir, then rename
-    fd, tmp = tempfile.mkstemp(dir=CACHE_DIR, suffix=".part")
-    os.close(fd)
-    try:
-        sf.write(tmp, joined, sr, format="WAV")
-        target = loudness_target()
-        if target is not None:
-            fd2, tmp2 = tempfile.mkstemp(dir=CACHE_DIR, suffix=".part.wav")
-            os.close(fd2)
-            try:
-                if _normalize_loudness(Path(tmp), Path(tmp2), sr, target):
-                    os.replace(tmp2, tmp)
-            finally:
-                if os.path.exists(tmp2):
-                    os.unlink(tmp2)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    # everything past the model call belongs to the pipeline, including
+    # the trim: it is numpy on audio already generated, so holding the
+    # runtime lock through it would only make other renders wait
+    pipe.render(pieces, sr, path)
     if final != path:
-        _stretch(path, final, speed)
+        pipe.stretch(path, final, speed)
     evict_cache(keep=(final, path))
     return final
 
