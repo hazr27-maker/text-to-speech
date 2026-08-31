@@ -474,12 +474,19 @@ setting that forgets the key fails the suite rather than shipping.
   synthesis, so changing it doesn't make a take stale.
 - **Script-writing guidance**: `TTS-BEST-PRACTICES.md`.
 - **Models**: the top-right dropdown switches checkpoints — the 1.7B
-  CustomVoice at 8-bit (default, best quality) and 4-bit (smaller, more
-  mispronunciations and stutters). An unused one costs a download; the
-  page asks first, shows progress, and Cancel keeps the part-download.
-  The 0.6B builds are supported but deliberately unlisted: they ignore
-  each voice's `style` text, so the voice set silently flattens into
-  one delivery. Add their ids to `TTS_MODELS` if you want them anyway.
+  CustomVoice at 8-bit (the default, best quality) and 4-bit (smaller,
+  more mispronunciations and stutters):
+
+  ```
+  mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit
+  mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-4bit
+  ```
+
+  An unused one costs a download; the page asks first, shows progress,
+  and Cancel keeps the part-download. The 0.6B builds are supported but
+  deliberately unlisted: they ignore each voice's `style` text, so the
+  voice set silently flattens into one delivery. Add their ids to
+  `TTS_MODELS` if you want them anyway.
 - **Checking the manifest**: `python engine.py check` reports voices
   the active checkpoint can't render ("Reload config" shows the same),
   and runs the language-detection corpus in the same pass — the two
@@ -502,7 +509,7 @@ setting that forgets the key fails the suite rather than shipping.
 | Var | Default | Purpose |
 |---|---|---|
 | `TTS_MODEL_ID` | `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit` | checkpoint active at boot |
-| `TTS_MODELS` | 1.7B CustomVoice, 8-bit + 4-bit | comma-separated selector list |
+| `TTS_MODELS` | `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit`, `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-4bit` | comma-separated selector list |
 | `TTS_CACHE_DIR` | `./cache` | rendered WAVs |
 | `TTS_CACHE_MAX_MB` | `500` | cache ceiling; LRU eviction past it, `off` = unbounded |
 | `TTS_MAX_CHARS` | `350` | chunk size |
