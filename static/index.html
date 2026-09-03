@@ -405,6 +405,12 @@
     .modelbox { width: 100%; }
     .model-combo { flex: 1 1 auto; }
     .card { padding: .9rem; }
+    /* a badge ellipsised to "Voice changed since this c…" states
+       nothing, so here it takes its own line under the label rather
+       than a share of one. The × stays up beside the label, where it
+       is reached from. */
+    .cardHead { flex-wrap: wrap; }
+    .cardHead .stale { order: 3; flex-basis: 100%; }
     #go, #regen { flex: 1 1 auto; }
     /* the slider takes the whole row here, so the counter can't stay
        beside it. Ordering it first keeps it on the line above rather
@@ -443,17 +449,35 @@
   .find .d { font-size: var(--fs-xs); color: var(--muted); margin-top: .2rem; line-height: 1.5; }
   .find .tok { font-size: var(--fs-xs); margin-top: .3rem; overflow-wrap: anywhere; }
   /* Dismiss is a flex sibling, not an absolutely positioned overlay, so
-     it can never sit on top of the text beside it at a narrow width. */
-  .find .x {
-    flex: none; align-self: flex-start;
+     it can never sit on top of the text beside it at a narrow width.
+     One class, two users: each note carries one, and so does the check
+     card's own head — the same gesture closes either. */
+  .x {
+    flex: none;
     display: flex; align-items: center; justify-content: center;
-    width: 1.35rem; height: 1.35rem; margin: -.1rem -.25rem 0 0;
+    width: 1.35rem; height: 1.35rem;
     padding: 0; border: 0; border-radius: var(--r-sm);
     background: none; color: var(--muted); cursor: pointer;
   }
-  .find .x svg { width: .7em; height: .7em; }
-  .find .x:hover { background: var(--btn-hover); color: var(--ink); }
-  .find .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .x svg { width: .7em; height: .7em; }
+  .x:hover { background: var(--btn-hover); color: var(--ink); }
+  .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .find .x { align-self: flex-start; margin: -.1rem -.25rem 0 0; }
+  /* The label owns the row and the close sits at the card's padding edge;
+     negative margins keep the taller button from growing the head. */
+  .cardHead { display: flex; align-items: center; gap: .6rem; margin-bottom: .4rem; }
+  .cardHead label { flex: 1; margin-bottom: 0; }
+  .cardHead .x { margin: -.35rem -.35rem -.35rem 0; }
+  /* "what you are looking at was made from something else now" — muted,
+     not --warn: nothing is wrong, the panel is just behind the inputs.
+     It states the fact and leaves the fix to the reader, the way a
+     disabled Regenerate does. */
+  .stale {
+    font-size: var(--fs-xs); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: .1rem .55rem; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  }
   #chunkBox { margin-top: .9rem; }
   #chunkBox:empty { display: none; }
   .chunk { font-size: var(--fs-xs); color: var(--muted); border-left: 2px solid var(--line); padding: .15rem 0 .15rem .6rem; margin-top: .35rem; line-height: 1.5; }
@@ -498,7 +522,13 @@
   </div>
 
   <div class="card hidden" id="checkCard">
-    <label>Check</label>
+    <div class="cardHead">
+      <label>Check</label>
+      <span class="stale hidden" id="checkStale"></span>
+      <button class="x" id="checkClose" aria-label="Close the check" title="Close">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </div>
     <div id="spokenBox">
       <div class="checkHead">What the model will be asked to say</div>
       <div id="spoken"></div>
@@ -509,7 +539,10 @@
   </div>
 
   <div class="card hidden" id="result">
-    <label>Speech</label>
+    <div class="cardHead">
+      <label>Speech</label>
+      <span class="stale hidden" id="takeStale"></span>
+    </div>
     <div class="wavebox">
       <canvas id="wave" height="96" title="Click to seek"></canvas>
       <div id="loading" aria-live="polite">
@@ -814,7 +847,7 @@ $('modelSel').addEventListener('change', async () => {
     combos.model.sync();
     fail(e.message);
   }
-  syncRegen();
+  syncState();
 });
 // the manifest's `style` still steers synthesis; it is simply not shown
 function applyVoice() {
@@ -830,11 +863,23 @@ function showSpeed() {
   s.style.setProperty('--fill',
     (s.value - s.min) / (s.max - s.min) * 100 + '%');
 }
-$('voice').addEventListener('change', () => { applyVoice(); syncRegen(); });
+$('voice').addEventListener('change', () => { applyVoice(); syncState(); });
 $('speed').addEventListener('input', showSpeed);
+// Speed is applied after synthesis, so the take on screen is simply the
+// wrong pace once the slider moves — not stale, just superseded. On
+// release (not on every pixel of the drag) the current take is re-fetched
+// at the new speed: with the cache on that is an ffmpeg tempo pass over
+// the cached base, not a re-synthesis. It honours the cache setting
+// rather than quietly overriding it, so with caching off this costs a
+// real render — which is what turning it off asks for.
+$('speed').addEventListener('change', () => {
+  if (hasAudio && !driftFrom(lastRender)) generate(false);
+});
 $('text').addEventListener('input', () => {
   showCount();
-  syncRegen();
+  // an empty script has nothing to show a take or a reading of
+  if (!$('text').value.trim()) { discardTake(); closeCheck(); }
+  syncState();
 });
 
 makeScroller($('text'));
@@ -899,6 +944,8 @@ let hasAudio = false;
 // take, so it only means anything while the inputs still match it —
 // with none, or with edited text, it was silently a second Generate.
 let lastRender = null;   // {text, voice, model}
+let lastCheck = null;    // the same, for the reading in the check card
+let takeNote = false;    // is the status line currently about this take?
 let audioCtx = null;   // shared — see the note where it's first used
 let lastUrl = null;    // the current take's blob URL, revoked on replace
 
@@ -906,19 +953,118 @@ let lastUrl = null;    // the current take's blob URL, revoked on replace
 // listening to: same text, same voice, same checkpoint. Speed is left
 // out on purpose — it is applied after synthesis, so it doesn't make a
 // take stale, and re-rolling at a new speed is a coherent thing to ask.
-function syncRegen() {
+// The three inputs a take or a check is made from. Both cards record
+// them and compare, so "is this still what you are looking at?" is asked
+// the same way in both places rather than spelled out twice.
+const currentModel = () => {
   const v = voicesById[$('voice').value];
-  const model = (v && v.model) || $('modelSel').value;
-  const stale = !lastRender
-    || lastRender.text !== $('text').value.trim()
-    || lastRender.voice !== $('voice').value
-    || lastRender.model !== model;
+  return (v && v.model) || $('modelSel').value;
+};
+const inputsNow = () => ({
+  text: $('text').value.trim(),
+  voice: $('voice').value,
+  model: currentModel(),
+});
+// which input has moved on since `ref` was recorded, or null. Text is
+// checked first because it is both the likeliest edit and the one that
+// invalidates the most.
+function driftFrom(ref) {
+  if (!ref) return null;
+  const now = inputsNow();
+  if (ref.text !== now.text) return 'text';
+  if (ref.voice !== now.voice) return 'voice';
+  if (ref.model !== now.model) return 'model';
+  return null;
+}
+const voiceLabel = id => (voicesById[id] || {}).label || id;
+const modelLabel = id =>
+  [...$('modelSel').options].find(o => o.value === id)?.textContent
+  || id.split('/').pop();
+
+// Everything that reacts to an input changing, in one call — three
+// panels that must never disagree about whether they are current.
+function syncState() {
+  syncRegen();
+  syncTake();
+  syncCheck();
+}
+
+// A take is not discarded when the voice or the model changes: comparing
+// two voices on the same line is a real thing to do, and a picker click
+// that threw away a render would punish it. What was misleading was the
+// silence — the card played one voice while the picker named another.
+// So the take says what made it, and only says it once that stops being
+// what is selected.
+function syncTake() {
+  const drift = hasAudio ? driftFrom(lastRender) : null;
+  const text = {
+    text: 'From the earlier script',
+    voice: `Rendered with ${voiceLabel(lastRender && lastRender.voice)}`,
+    model: `Rendered with ${modelLabel((lastRender && lastRender.model) || '')}`,
+  }[drift] || '';
+  $('takeStale').textContent = text;
+  $('takeStale').classList.toggle('hidden', !text);
+}
+
+// The check is marked, not closed. You edit a script *because* of what
+// the check told you, so closing it on the first keystroke would take
+// away the thing being worked from; and re-running it on every keystroke
+// would be a request per character. Saying "this reading is behind" and
+// leaving Check to re-run is the honest middle.
+function syncCheck() {
+  const drift = $('checkCard').classList.contains('hidden')
+    ? null : driftFrom(lastCheck);
+  const text = {
+    text: 'Script edited since this check',
+    voice: 'Voice changed since this check',
+    model: 'Model changed since this check',
+  }[drift] || '';
+  $('checkStale').textContent = text;
+  $('checkStale').classList.toggle('hidden', !text);
+}
+
+function closeCheck() {
+  $('checkCard').classList.add('hidden');
+  lastCheck = null;
+  syncCheck();
+}
+
+function syncRegen() {
+  const stale = !lastRender || driftFrom(lastRender);
   $('regen').disabled = stale;
   // a disabled button shows no tooltip, so the reason has to be on the
   // enabled state's absence — say what it does, and let the state say when
   $('regen').title = stale
     ? 'Re-rolls the take on screen. Generate one first — after an edit, use Generate.'
     : 'Re-roll: synthesis is sampled, so a re-render often fixes an awkward reading. Bypasses and overwrites the cache.';
+}
+
+// Emptying the script discards the take. A clip on screen is an answer
+// to the words above it; with those gone it answers nothing, and the
+// player still offers to play and download audio the page can no longer
+// account for. Nothing is lost that Generate won't rebuild — the render
+// is cached server-side, so the same text returns it instantly.
+//
+// It is a discard, not just a hide: the blob URL is released (the same
+// leak the render path avoids by revoking), playback stops rather than
+// continuing under a closed card, and lastRender is cleared so Regenerate
+// goes stale via syncRegen rather than re-rolling a take that is gone.
+function discardTake() {
+  // never mid-render: the card is showing the overlay for a take that is
+  // still coming, and pulling it out from under that reads as a crash
+  if (!hasAudio || document.body.classList.contains('busy')) return;
+  player.pause();
+  player.removeAttribute('src');
+  player.load();
+  if (lastUrl) { URL.revokeObjectURL(lastUrl); lastUrl = null; }
+  $('dl').removeAttribute('href');
+  hasAudio = false;
+  waveBuf = null;
+  lastRender = null;
+  $('result').classList.add('hidden');
+  // the stutter note is about a take that no longer exists
+  if (takeNote) { setStatus(''); takeNote = false; }
+  syncState();
 }
 
 function drawWave(buffer, progress = 0) {
@@ -1045,7 +1191,13 @@ function flash(el, text, level = '', ms) {
     }, 250);
   }, ms ?? Math.min(12000, 4000 + text.length * 60)));
 }
-const setStatus = (text, level, ms) => flash($('status'), text, level, ms);
+// Any new message means the line is no longer about the take — so the
+// flag clears itself here rather than at each call site, and discardTake
+// can only ever take down a note that is still the take's own.
+const setStatus = (text, level, ms) => {
+  takeNote = false;
+  flash($('status'), text, level, ms);
+};
 
 function fail(message) {
   // a dead server surfaces only as fetch's own opaque wording;
@@ -1114,19 +1266,55 @@ async function runDownload(model) {
 // phase above, with its own bytes and its own Cancel
 function startProgress(force, warm) {
   const t0 = Date.now();
-  const paint = () => setLabel(warm
-    ? `${force ? 'Regenerating' : 'Generating'}… ${elapsed(t0)}`
-    : `Loading the voice model… ${elapsed(t0)}\nUsually under a minute.`);
+  const paint = () => {
+    if (stopRequested) return;   // the second-by-second repaint must
+    setLabel(warm                // not undo what Stop just put there
+      ? `${force ? 'Regenerating' : 'Generating'}… ${elapsed(t0)}`
+      : `Loading the voice model… ${elapsed(t0)}\nUsually under a minute.`);
+  };
   overlay('loading');
   paint();
+  // the same offer the download makes, for the same reason: a wait you
+  // cannot leave is the worse half of a wait you cannot predict
+  setActions([{ label: 'Stop', onClick: stopRender }]);
   progressTimer = setInterval(paint, 1000);
 }
 
 function stopProgress() { clearInterval(progressTimer); progressTimer = null; }
 
+// The render this Stop belongs to. A new id per render, so a Stop can
+// never land on the one after the one it was clicked for.
+let renderId = null;
+let stopRequested = false;
+
+async function stopRender() {
+  if (!renderId || stopRequested) return;
+  stopRequested = true;
+  setActions([]);
+  // "Stopping", not "Stopped": the model call in flight cannot be
+  // interrupted, so the wait stays on screen until the render lets go
+  // at the next chunk. Saying otherwise would be the lie this whole
+  // arrangement exists to avoid (see engine._Renders).
+  setLabel('Stopping…');
+  try {
+    await fetch('/speak/cancel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ render_id: renderId }),
+    });
+  } catch {}
+}
+
 async function generate(force) {
   const text = $('text').value.trim();
   if (!text) { setStatus('Enter some text first.'); return; }
+  // the take on screen is about to be replaced and its controls are
+  // already disabled under the shimmer — leaving it audible would be a
+  // clip playing that nothing on the page can stop
+  player.pause();
+  renderId = (crypto.randomUUID && crypto.randomUUID())
+    || String(Date.now() + Math.random());
+  stopRequested = false;
   // the model selector too: /speak holds the model for the whole
   // render, so a switch clicked now would only sit blocked behind it —
   // better to say so than to look ignored
@@ -1164,8 +1352,12 @@ async function generate(force) {
         text, voice: $('voice').value,
         cache: $('useCache').checked && !force,
         speed: Number($('speed').value),
+        render_id: renderId,
       }),
     });
+    // a render you stopped is not a failure: take the wait down and say
+    // nothing, because the click already said it
+    if (res.status === 409) { overlay(null); return; }
     if (!res.ok) throw new Error(await detailOf(res));
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -1191,8 +1383,15 @@ async function generate(force) {
     waveBuf = buf;
     drawWave(buf);
     const note = res.headers.get('X-TTS-Note');
-    // longer dwell: this one asks you to listen to the clip it is about
-    setStatus(note ? `⚠ ${note}` : '', note ? 'warn' : '', 15000);
+    // This one asks you to listen to a clip before deciding, so its
+    // dwell is the clip: length + time to hear it out and think, floored
+    // at the old 15s for short lines and capped so the line still
+    // clears itself. It stays in #status like every other message —
+    // moving it onto the card would be a second message surface — but
+    // it is tied to the take, and discardTake takes it down with it.
+    setStatus(note ? `⚠ ${note}` : '', note ? 'warn' : '',
+      Math.min(60000, Math.max(15000, buf.duration * 1000 + 8000)));
+    takeNote = !!note;   // after, so setStatus's own reset doesn't undo it
     loadHealth();
   } catch (e) {
     fail(e.message);
@@ -1202,7 +1401,11 @@ async function generate(force) {
     setActions([]);
     document.body.classList.remove('busy');
     $('go').disabled = $('modelSelBtn').disabled = false;
-    syncRegen();
+    syncState();
+    // the script can be emptied while this render was in flight, where
+    // the rule below had to ignore it — so apply it once more now that
+    // the take has actually landed, or it lands under an empty box
+    if (!$('text').value.trim()) discardTake();
   }
 }
 $('go').addEventListener('click', () => generate(false));
@@ -1327,6 +1530,8 @@ function renderCheck(r) {
         `<div class="chunk"><b>${i + 1}</b> &mdash; ${esc(c)}</div>`).join('')
     : '';
   $('checkCard').classList.remove('hidden');
+  lastCheck = inputsNow();
+  syncCheck();
 }
 
 async function runCheck() {
@@ -1374,6 +1579,15 @@ $('findings').addEventListener('click', e => {
 
 $('checkBtn').addEventListener('click', runCheck);
 
+// Closing the whole panel is the note dismissal writ large: it means "I
+// have read this", not "stop checking". The next check re-opens it with
+// a fresh reading, so nothing is remembered. Focus goes back to the
+// button that opened it, which is also where it will reappear from.
+$('checkClose').addEventListener('click', () => {
+  closeCheck();
+  $('checkBtn').focus();
+});
+
 // The button is hidden rather than disabled when the setting is off: a
 // greyed control advertises something you cannot use and offers no route
 // to enabling it. The card goes with it — a panel left standing would
@@ -1381,7 +1595,7 @@ $('checkBtn').addEventListener('click', runCheck);
 function applyAllowCheck() {
   const on = $('allowCheck').checked;
   $('checkBtn').classList.toggle('hidden', !on);
-  if (!on) $('checkCard').classList.add('hidden');
+  if (!on) closeCheck();
 }
 $('allowCheck').addEventListener('change', applyAllowCheck);
 </script>

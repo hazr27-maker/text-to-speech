@@ -212,6 +212,72 @@ def test_eviction_spares_the_render_just_served(rt, cache, voice, monkeypatch):
     assert only.exists()
 
 
+# --------------------------------------------------- cancellation
+#
+# A Stop that stops the waiting but not the work is the thing this
+# service refused to ship for downloads, and refuses here. What can be
+# stopped is the *next* chunk, so these tests are about the boundary:
+# a cancel is honoured there, and nowhere else pretends to honour it.
+
+
+def test_cancel_before_the_render_reaches_the_model(rt, cache, calls):
+    engine.renders.cancel("r1")
+    with pytest.raises(engine.RenderCancelled):
+        engine.speak("Never spoken.", "narrator_en", rt=rt, render_id="r1")
+    assert calls.n == 0, "a render cancelled while queued must not synthesise"
+
+
+def test_cancel_lands_on_the_next_chunk(rt, cache, monkeypatch, calls):
+    """Mid-render: the chunk in flight finishes, the next never starts."""
+    monkeypatch.setattr(engine, "MAX_CHARS", 30)
+    text = "First sentence here. Second sentence here. Third sentence here."
+    assert len(engine.chunk_text(text, engine.MAX_CHARS)) == 3
+    original = rt.backend.generate
+
+    def cancel_after_the_first(*a, **kw):
+        engine.renders.cancel("r2")
+        return original(*a, **kw)
+
+    rt.backend.generate = cancel_after_the_first
+    with pytest.raises(engine.RenderCancelled):
+        engine.speak(text, "narrator_en", rt=rt, render_id="r2")
+    assert calls.n == 1, "only the chunk already in flight is spent"
+    assert not list(cache.glob("*.wav")), "a cancelled render writes nothing"
+
+
+def test_a_cancelled_id_does_not_poison_the_next_render(rt, cache):
+    """The flag is dropped when the render it belongs to lets go —
+    otherwise an id reused by a client could never render again."""
+    engine.renders.cancel("r3")
+    with pytest.raises(engine.RenderCancelled):
+        engine.speak("Stopped.", "narrator_en", rt=rt, render_id="r3")
+    out = engine.speak("Rendered.", "narrator_en", rt=rt, render_id="r3")
+    assert out.exists()
+
+
+def test_cancel_reports_whether_it_caught_a_live_render(rt, cache, monkeypatch):
+    assert engine.renders.cancel("not-running") is False
+    monkeypatch.setattr(engine, "MAX_CHARS", 10)   # two chunks, so there
+    seen = {}                                       # is a boundary to stop on
+    original = rt.backend.generate
+
+    def note_liveness(*a, **kw):
+        seen["live"] = engine.renders.cancel("r4")
+        return original(*a, **kw)
+
+    rt.backend.generate = note_liveness
+    with pytest.raises(engine.RenderCancelled):
+        engine.speak("First. Second.", "narrator_en", rt=rt, render_id="r4")
+    assert seen["live"] is True
+
+
+def test_a_render_without_an_id_is_never_cancelled(rt, cache, calls):
+    """The API's default: no id, no cancellation, no bookkeeping."""
+    engine.renders.cancel("r5")
+    out = engine.speak("Anonymous.", "narrator_en", rt=rt)
+    assert out.exists() and calls.n == 1
+
+
 # -------------------------------------------------------- the speed
 
 

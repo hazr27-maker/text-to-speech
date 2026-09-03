@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 from collections.abc import Iterable
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -128,6 +129,73 @@ class VoiceError(KeyError):
 
 class ManifestError(ValueError):
     """A voices.yaml entry the active backend cannot render."""
+
+
+class RenderCancelled(Exception):
+    """A render abandoned because the caller asked it to stop."""
+
+
+class _Renders:
+    """In-flight renders, by caller-supplied id, so one can be stopped.
+
+    Cancellation is *cooperative and lands on a chunk boundary*, and the
+    honesty of that is the whole design. A checkpoint download could be
+    killed outright because it runs in its own process (see _Download);
+    a render cannot -- it is one model call inside this process, holding
+    the accelerator, with no interruption point of its own. What the
+    render does have is the seam between chunks: long text is already
+    synthesised piece by piece, so a Stop takes effect at the next one.
+
+    So this stops real work rather than only the waiting, which is the
+    line _Download drew and the reason a Cancel is offered at all. The
+    price is that it is not instant, and for text short enough to be a
+    single chunk there is nothing to stop early -- the caller is told
+    "stopping", never "stopped", and the UI keeps its wait on screen
+    until the render actually lets go.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._live: set[str] = set()
+        self._cancelled: set[str] = set()
+
+    @contextmanager
+    def track(self, render_id: str | None):
+        """Mark a render live for its duration. No id, no tracking."""
+        if render_id is None:
+            yield
+            return
+        with self._lock:
+            self._live.add(render_id)
+        try:
+            yield
+        finally:
+            # both sets, or a cancel that arrived for a render already
+            # finished would sit here forever
+            with self._lock:
+                self._live.discard(render_id)
+                self._cancelled.discard(render_id)
+
+    def cancel(self, render_id: str) -> bool:
+        """Ask a render to stop; True if it was still running.
+
+        A cancel is recorded even for an id not yet live: the client
+        sends its id with the request, so a Stop can beat the render to
+        the threadpool. Recorded early it is seen at the first
+        checkpoint; recorded late it is discarded by `track`.
+        """
+        with self._lock:
+            self._cancelled.add(render_id)
+            return render_id in self._live
+
+    def cancelled(self, render_id: str | None) -> bool:
+        if render_id is None:
+            return False
+        with self._lock:
+            return render_id in self._cancelled
+
+
+renders = _Renders()
 
 
 # ---------------------------------------------------------------- manifest
@@ -1317,6 +1385,7 @@ def speak(
     speed: float | None = None,
     rt: "_Runtime | None" = None,
     pipe: RenderPipeline | None = None,
+    render_id: str | None = None,
 ) -> Path:
     """Render text with a manifest voice; returns the path to a WAV.
     Cached by content hash — a line is synthesised once, ever. Speed
@@ -1327,6 +1396,9 @@ def speak(
     They are arguments so a caller can supply others — a Silence backend
     and a pipeline with different settings render the whole path here in
     milliseconds, which is how any of this is tested.
+
+    `render_id` names this render so `renders.cancel(id)` can stop it;
+    it raises RenderCancelled at the next chunk boundary.
     """
     rt = rt or runtime
     pipe = pipe or pipeline
@@ -1340,7 +1412,11 @@ def speak(
     # the runtime lock is held from model resolution through the last
     # chunk: the model id is baked into the cache key, so nothing may
     # swap the checkpoint while a render that key describes is running
-    with rt._lock:
+    with renders.track(render_id), rt._lock:
+        # a render can wait here behind another one, and a Stop clicked
+        # during that wait must not be spent synthesising anyway
+        if renders.cancelled(render_id):
+            raise RenderCancelled
         # a voice may pin its own checkpoint; do this first, because the
         # model id is part of the cache key and of what the backend can do
         if voice.get("model"):
@@ -1372,6 +1448,10 @@ def speak(
         pieces: list[np.ndarray] = []
         sr = 0
         for chunk in chunks:
+            # the seam the whole cancellation rests on: the model call
+            # below cannot be interrupted, the gap before it can
+            if renders.cancelled(render_id):
+                raise RenderCancelled
             audio, sr = rt.synthesize(
                 chunk,
                 source,

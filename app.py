@@ -63,6 +63,13 @@ class SpeakRequest(BaseModel):
     # 1.0 = as generated; <1 slower, >1 faster (pitch preserved via ffmpeg).
     # None falls back to the voice's manifest `speed`, then 1.0.
     speed: float | None = Field(default=None, ge=0.5, le=1.5)
+    # names this render so POST /speak/cancel can stop it; optional, so
+    # an API caller that never wants to cancel sends nothing
+    render_id: str | None = Field(default=None, max_length=64)
+
+
+class CancelRequest(BaseModel):
+    render_id: str = Field(min_length=1, max_length=64)
 
 
 # sync def on purpose: FastAPI runs it in the threadpool, keeping the
@@ -70,7 +77,18 @@ class SpeakRequest(BaseModel):
 @app.post("/speak")
 def speak(req: SpeakRequest):
     try:
-        path = engine.speak(req.text, req.voice, use_cache=req.cache, speed=req.speed)
+        path = engine.speak(
+            req.text,
+            req.voice,
+            use_cache=req.cache,
+            speed=req.speed,
+            render_id=req.render_id,
+        )
+    except engine.RenderCancelled:
+        # 409, not an error page: the render stopped because it was
+        # asked to. The UI takes its own wait down without a message —
+        # nothing failed, and it already knows what it clicked.
+        raise HTTPException(status_code=409, detail="Render stopped.")
     except engine.VoiceError:
         raise HTTPException(
             status_code=404,
@@ -94,7 +112,7 @@ def speak(req: SpeakRequest):
     headers = {}
     note = _stutter_check(path, req)
     if note:
-        headers["X-TTS-Note"] = note
+        headers["X-TTS-Note"] = _header_text(note)
     return FileResponse(
         path,
         media_type="audio/wav",
@@ -110,6 +128,21 @@ def speak(req: SpeakRequest):
 # judge; this only nudges them to listen closely.
 
 
+# A header value is latin-1 on the wire, and the note is prose written
+# to the same house style as everything else — so an em dash in it did
+# not merely look wrong, it raised UnicodeEncodeError while building the
+# response and turned a good render into a 500. The message below keeps
+# to ASCII, and this keeps any future one from doing the same: the note
+# is advice, and advice may never cost the audio it is about.
+_HEADER_SUBS = {"\u2014": "-", "\u2013": "-", "\u2019": "'", "\u201c": '"', "\u201d": '"'}
+
+
+def _header_text(text: str) -> str:
+    for char, plain in _HEADER_SUBS.items():
+        text = text.replace(char, plain)
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
 def _stutter_check(path: Path, req: SpeakRequest) -> str | None:
     voice = engine.get_voice(req.voice)
     chars = len(engine.spoken_text(req.text, voice).replace(" ", ""))
@@ -118,8 +151,17 @@ def _stutter_check(path: Path, req: SpeakRequest) -> str | None:
     speed = req.speed if req.speed is not None else float(voice.get("speed", 1.0))
     duration = sf.info(path).duration * speed  # undo the tempo stretch
     if duration / chars > engine.stutter_threshold(voice):
-        return "The model may have repeated a word — listen back, or Regenerate."
+        return "The model may have repeated a word. Listen back, or Regenerate."
     return None
+
+
+# Cancellation lands on a chunk boundary — see engine._Renders for why
+# that is the honest limit rather than a shortcut. This endpoint only
+# records the ask; the render itself is what stops, and the /speak call
+# it belongs to answers 409 when it does.
+@app.post("/speak/cancel")
+def cancel_speak(req: CancelRequest):
+    return {"stopping": engine.renders.cancel(req.render_id)}
 
 
 @app.get("/voices")
